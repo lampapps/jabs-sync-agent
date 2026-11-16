@@ -1,0 +1,62 @@
+# =============================================================================
+# JABS Sync Agent job
+# =============================================================================
+# Copy this file to config/jobs/<name>.yaml (the admin console's New job does it
+# and fills in the name). Every setting a job can have is listed here; the
+# uncommented ones are the minimum. Settings that also exist in config.yaml are
+# overrides: leave them commented out to use the global value, and see
+# config.example.yaml for what each one means.
+
+# Name shown on the dashboard. Defaults to the file name.
+job_name: "example"
+
+# One or more source/destination pairs, synced in order. Each pair is reported
+# to the dashboard as its own job (job_name:pair name), and a failing pair never
+# stops the pairs after it. Both paths must be absolute directories, and one may
+# not contain the other.
+pairs:
+  - name: "documents"            # optional; defaults to the source's last path component
+    source: "/mnt/nas1/documents"
+    destination: "/mnt/nas2/documents"
+    # Extra excludes for this pair only, on top of the job list and common_exclude.yaml.
+    # exclude:
+    #   - "Archive/"
+    # Keep overwritten and deleted files here instead of losing them (absolute path).
+    # backup_dir: "/mnt/nas2/.jabs-backups"
+
+# When to run, as 5-field cron expressions evaluated by the agent. List several
+# to run at different times; a job due on more than one still runs once.
+# A schedule is ignored until enabled is true.
+schedules:
+  - cron: "0 2 * * *"    # 2:00 AM daily
+    enabled: false
+  # - cron: "0 */6 * * *"  # every 6 hours
+  #   enabled: false
+
+# Run a quick verify after each pair (default: the global setting).
+# verify_after_sync: true
+
+# Patterns to skip in every pair, added to config/common_exclude.yaml (which
+# applies to every job while use_common_exclude is true in config.yaml).
+# rsync --exclude pattern syntax: a trailing slash matches a directory, * and ?
+# are wildcards.
+# exclude:
+#   - "Downloads/"
+#   - "*.iso"
+
+# rsync settings for this job: only the keys you set replace the global value.
+# Details in config.example.yaml.
+# rsync:
+#   delete: true
+#   preserve_owner: false
+#   preserve_group: false
+#   preserve_permissions: true
+#   numeric_ids: true
+#   whole_file: true
+#   hard_links: false
+#   io_timeout: 300
+#   max_duration: 0
+#   min_free_bytes: 0
+#   backup_dir: ""
+#   backup_dir_retention_days: 30
+#   extra_args: []

@@ -1,0 +1,86 @@
+# =============================================================================
+# JABS Sync Agent Configuration Example
+# =============================================================================
+# Copy this file to 'config.yaml' (./setup.sh does it for you) and customize it.
+# These are the system-wide settings; an individual job (config/jobs/*.yaml)
+# can override verify_after_sync and any rsync option. Secrets (SMTP login,
+# dashboard key) go in .env, never here.
+
+# --- Dashboard (optional) ---
+# The agent runs fine on its own. Set JABS_DASHBOARD_URL and JABS_AGENT_KEY in
+# .env to report to a JABS dashboard. Set enabled to false to force standalone
+# mode even when those are set.
+dashboard:
+  enabled: true
+
+# Name reported to the dashboard for this machine. Blank = the system hostname.
+hostname: ""
+
+# --- Exclusions ---
+use_common_exclude: true   # true | false - use patterns from config/common_exclude.yaml
+
+# --- Integrity checks ---
+# A cheap quick verify (an rsync dry run comparing size and mtime only, no file
+# content is read) runs after every pair's sync unless disabled here or in a
+# job. For a slow check that reads and compares content, run manually:
+# .venv/bin/python -m app verify --deep [JOB]
+verify_after_sync: true
+
+# --- rsync behavior (a job can override any of these under its own `rsync:`) ---
+# Defaults suit local or NFS-mounted paths on a trusted LAN.
+rsync:
+  # Exact mirror: files removed from the source are removed from the
+  # destination on the next run. Set to false for an append-only copy.
+  delete: true
+
+  # Ownership (uid/gid) is NOT preserved by default: two hosts rarely share the
+  # same uid/gid mapping, so copying it usually produces wrong owners. Enable
+  # only if this host and its mounts share a user directory (LDAP, NIS).
+  preserve_owner: false
+  preserve_group: false
+  preserve_permissions: true
+
+  # Skip uid/gid to name lookups entirely (cheap and safe to leave on).
+  numeric_ids: true
+
+  # Copy whole files instead of rsync's delta algorithm. On a LAN or NFS mount
+  # bandwidth is not the bottleneck, so this is usually faster and lighter on CPU.
+  whole_file: true
+
+  # Preserve hard links within a source tree (adds overhead).
+  hard_links: false
+
+  # rsync's own --timeout in seconds: abort when no data moves for this long, so
+  # a stalled mount cannot hang a job. An idle timeout, not a cap on run time.
+  io_timeout: 300
+
+  # Hard wall-clock cap in seconds for one pair, 0 = none. A last-resort safety
+  # net; a large legitimate transfer should not be cut short.
+  max_duration: 0
+
+  # Refuse to sync into a destination with less free space than this (bytes),
+  # 0 = no check. For example 10737418240 for 10 GiB.
+  min_free_bytes: 0
+
+  # Keep files a sync would overwrite or delete in <backup_dir>/<job:pair>/<YYYYMMDD_HHMMSS>/
+  # instead of losing them. Absolute path; empty = off. A pair can set its own.
+  backup_dir: ""
+  # Days to keep those per-run directories (checked after each real sync), 0 = forever.
+  backup_dir_retention_days: 0
+
+  # Raw passthrough for any other rsync flag, e.g. ["--bwlimit=5000"] (KiB/s).
+  extra_args: []
+
+# --- Email (immediate failure and completion alerts; the dashboard only sends a
+# periodic digest, so per-event alerting for this agent's own jobs lives here) ---
+email:
+  smtp_server: ""
+  smtp_port: 587
+  to_addrs: []
+  use_tls: true
+  notify_on:
+    error:
+      enabled: true
+    backup_complete:
+      enabled: false
+  from_addr: ""          # blank = the SMTP login name (JABS_SMTP_USER in .env)
