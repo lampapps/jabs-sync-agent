@@ -43,9 +43,11 @@ rsync:
   # Skip uid/gid to name lookups entirely (cheap and safe to leave on).
   numeric_ids: true
 
-  # Copy whole files instead of rsync's delta algorithm. On a LAN or NFS mount
-  # bandwidth is not the bottleneck, so this is usually faster and lighter on CPU.
-  whole_file: true
+  # Copy whole files instead of rsync's delta algorithm. Blank = automatic:
+  # whole files between local paths (a LAN or NFS mount is not bandwidth
+  # limited, so this is faster and lighter on CPU), delta transfer when a
+  # remote is involved (the link is the bottleneck). Set true or false to force.
+  whole_file:
 
   # Preserve hard links within a source tree (adds overhead).
   hard_links: false
@@ -68,8 +70,41 @@ rsync:
   # Days to keep those per-run directories (checked after each real sync), 0 = forever.
   backup_dir_retention_days: 0
 
-  # Raw passthrough for any other rsync flag, e.g. ["--bwlimit=5000"] (KiB/s).
+  # Raw passthrough for any other rsync flag, e.g. ["--exclude-from=/etc/x"].
   extra_args: []
+
+  # Cap on rsync's transfer rate in KiB/s, 0 = unlimited. Leave at 0 when the
+  # router already shapes traffic (for example UniFi Smart Queues).
+  bwlimit: 0
+
+  # Compress data in transit. Helps on a slow link, costs CPU, and is wasted on
+  # media that is already compressed.
+  compress: false
+
+  # Seconds to wait for a remote rsync daemon to accept the connection.
+  contimeout: 10
+
+  # Safety net for a mirror: fail a pair rather than delete more than this many
+  # files in one run, 0 = no limit. A mount that comes back half empty trips it.
+  max_delete: 0
+
+  # With delete on, fail a pair whose source has no files at all. A dropped NFS
+  # mount looks like an empty folder, and mirroring it would wipe the destination.
+  refuse_empty_source: true
+
+# --- Remotes (optional) ---
+# rsync daemons a pair can read from or write to, written as `name:path` in a
+# job's source or destination (the path is inside the module). One side of a
+# pair must be local; rsync cannot copy between two remotes. The password is
+# read from a file only the agent can read (chmod 600) holding just the
+# password, never from this file or the command line.
+# remotes:
+#   nas2:
+#     host: "nas2.tailnet.ts.net"     # a Tailscale name or IP
+#     module: "backup"                # the module name in the daemon's rsyncd.conf
+#     user: "jabs"
+#     password_file: "/home/jim/.config/jabs/nas2.secret"
+#     port: 873
 
 # --- Email (immediate failure and completion alerts; the dashboard only sends a
 # periodic digest, so per-event alerting for this agent's own jobs lives here) ---

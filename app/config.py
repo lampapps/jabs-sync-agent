@@ -9,7 +9,7 @@ import yaml
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from . import settings
+from . import endpoint, settings
 
 PathLike = Union[str, Path]
 
@@ -45,13 +45,18 @@ class RsyncOptions(_Model):
     preserve_group: bool = False
     preserve_permissions: bool = True
     numeric_ids: bool = True
-    whole_file: bool = True                # skip delta transfer; faster on a LAN or NFS mount
+    whole_file: Optional[bool] = None      # copy whole files; None = auto (yes between local paths, no with a remote)
     hard_links: bool = False
     io_timeout: int = Field(300, ge=0)     # rsync --timeout: abort when no data moves for this many seconds
     max_duration: int = Field(0, ge=0)     # hard wall-clock cap for one pair in seconds, 0 = none
     min_free_bytes: int = Field(0, ge=0)   # refuse to sync into a destination with less free space, 0 = no check
     backup_dir: str = ""                   # keep overwritten and deleted files here instead of losing them
     backup_dir_retention_days: int = Field(0, ge=0)
+    bwlimit: int = Field(0, ge=0)          # KiB/s cap on rsync's transfer rate, 0 = unlimited
+    compress: bool = False                 # compress in transit; helps on a slow link, costs CPU
+    contimeout: int = Field(10, ge=1)      # seconds to wait for a remote rsync daemon to accept the connection
+    max_delete: int = Field(0, ge=0)       # fail the pair rather than delete more files than this, 0 = no limit
+    refuse_empty_source: bool = True       # with delete on, a source with no files fails the pair (a dropped mount looks empty)
     extra_args: list[str] = Field(default_factory=list)
 
     @field_validator("backup_dir")
@@ -97,13 +102,37 @@ class DashboardConfig(_Model):
     enabled: bool = True   # false forces standalone mode even when JABS_DASHBOARD_URL is set
 
 
+class Remote(_Model):
+    """An rsync daemon (module) a pair can read from or write to as `name:path`."""
+
+    host: str = Field(min_length=1)
+    module: str = Field(min_length=1)
+    user: str = ""
+    password_file: str = ""      # absolute path of a chmod 600 file holding only the module's password
+    port: int = Field(873, ge=1, le=65535)
+
+    @field_validator("password_file")
+    @classmethod
+    def _password_file_absolute(cls, value: str) -> str:
+        return _absolute(value)
+
+
 class Config(_Model):
     hostname: str = Field("", pattern=HOST_PATTERN)  # reported to the dashboard; default is the system hostname
     use_common_exclude: bool = True
     verify_after_sync: bool = True
     rsync: RsyncOptions = Field(default_factory=RsyncOptions)
+    remotes: dict[str, Remote] = Field(default_factory=dict)
     email: EmailConfig = Field(default_factory=EmailConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+
+    @field_validator("remotes")
+    @classmethod
+    def _remote_names(cls, value: dict) -> dict:
+        for name in value:
+            if not re.match(r"^[A-Za-z][A-Za-z0-9_-]*$", name):
+                raise ValueError(f"remote name '{name}' must start with a letter and use letters, digits, - and _")
+        return value
 
 
 class Schedule(_Model):
@@ -119,7 +148,7 @@ class Schedule(_Model):
 
 
 class Pair(_Model):
-    """One source directory mirrored into one destination directory."""
+    """One source directory mirrored into one destination directory (each local, or `remote:path`)."""
 
     name: str = Field("", max_length=100)   # default: the source's last path component
     source: str = Field(min_length=1)
@@ -127,20 +156,40 @@ class Pair(_Model):
     exclude: list[str] = Field(default_factory=list)
     backup_dir: str = ""
 
-    @field_validator("source", "destination", "backup_dir")
+    @field_validator("source", "destination")
     @classmethod
-    def _absolute_path(cls, value: str) -> str:
+    def _endpoint(cls, value: str) -> str:
+        endpoint.parse(value)
+        return value
+
+    @field_validator("backup_dir")
+    @classmethod
+    def _backup_dir_absolute(cls, value: str) -> str:
         return _absolute(value)
 
     @model_validator(mode="after")
-    def _no_nesting(self) -> "Pair":
-        source, destination = os.path.realpath(self.source), os.path.realpath(self.destination)
-        if source == destination or source.startswith(destination + os.sep) or destination.startswith(source + os.sep):
+    def _compatible_endpoints(self) -> "Pair":
+        source, destination = endpoint.parse(self.source), endpoint.parse(self.destination)
+        if source.remote and destination.remote:
+            raise ValueError("rsync cannot copy between two remotes; one side must be a local path")
+        if endpoint.overlap(source, destination):
             raise ValueError(f"source {self.source} and destination {self.destination} must not contain each other")
+        if self.backup_dir and destination.remote:
+            raise ValueError("backup_dir is not supported when the destination is a remote")
         return self
 
+    def source_endpoint(self) -> endpoint.Endpoint:
+        return endpoint.parse(self.source)
+
+    def destination_endpoint(self) -> endpoint.Endpoint:
+        return endpoint.parse(self.destination)
+
+    def uses_remote(self) -> bool:
+        return bool(self.source_endpoint().remote or self.destination_endpoint().remote)
+
     def resolved_name(self) -> str:
-        return self.name.strip() or os.path.basename(self.source.rstrip("/")) or "pair"
+        source = self.source_endpoint()
+        return self.name.strip() or os.path.basename(source.path.rstrip("/")) or source.remote or "pair"
 
 
 class JobFile(_Model):
@@ -152,6 +201,7 @@ class JobFile(_Model):
     verify_after_sync: Optional[bool] = None
     rsync: dict = Field(default_factory=dict)
     exclude: list[str] = Field(default_factory=list)
+    stop_at: Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM local time
 
     @field_validator("rsync")
     @classmethod
@@ -168,6 +218,19 @@ class JobFile(_Model):
                              "set `name` on each pair")
         return self
 
+    @model_validator(mode="after")
+    def _pairs_do_not_feed_each_other(self) -> "JobFile":
+        """With delete on, one pair writing where another reads or writes would delete data and can loop."""
+        for i, first in enumerate(self.pairs):
+            for second in self.pairs[i + 1:]:
+                for a, b in ((first.destination, second.source), (second.destination, first.source),
+                             (first.destination, second.destination)):
+                    if endpoint.overlap(endpoint.parse(a), endpoint.parse(b)):
+                        raise ValueError(
+                            f"pairs '{first.resolved_name()}' and '{second.resolved_name()}' overlap: {a} and {b} are "
+                            "the same folder or one contains the other")
+        return self
+
 
 class Job(_Model):
     """A job with the global settings merged in."""
@@ -179,6 +242,7 @@ class Job(_Model):
     verify_after_sync: bool
     rsync: RsyncOptions
     exclude: list[str]
+    stop_at: Optional[str] = None
 
     def enabled_crons(self) -> list:
         return [s.cron for s in self.schedules if s.enabled]
@@ -260,11 +324,21 @@ def load_job(path: PathLike, cfg: Config) -> Job:
         raise ConfigError(_format_errors(path, exc)) from exc
     exclude = (_common_excludes() if cfg.use_common_exclude else []) + raw.exclude
     pairs = [pair.model_copy(update={"name": pair.resolved_name()}) for pair in raw.pairs]
+    rsync = RsyncOptions.model_validate({**cfg.rsync.model_dump(), **_set_keys(raw.rsync)})
+    for pair in pairs:
+        for text in (pair.source, pair.destination):
+            remote = endpoint.parse(text).remote
+            if remote and remote not in cfg.remotes:
+                known = ", ".join(sorted(cfg.remotes)) or "none"
+                raise ConfigError(f"{path}: pair '{pair.name}' uses the remote '{remote}', which is not in `remotes:` "
+                                  f"in config.yaml (defined: {known})")
+        if rsync.backup_dir and not pair.backup_dir and pair.destination_endpoint().remote:
+            raise ConfigError(f"{path}: pair '{pair.name}' writes to a remote, so the job's backup_dir cannot apply to it; "
+                              "it is not supported for remote destinations")
     return Job(
         name=raw.job_name or path.stem, path=str(path), pairs=pairs, schedules=raw.schedules,
         verify_after_sync=cfg.verify_after_sync if raw.verify_after_sync is None else raw.verify_after_sync,
-        rsync=RsyncOptions.model_validate({**cfg.rsync.model_dump(), **_set_keys(raw.rsync)}),
-        exclude=exclude,
+        rsync=rsync, exclude=exclude, stop_at=raw.stop_at,
     )
 
 

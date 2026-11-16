@@ -61,7 +61,7 @@ def _cmd_verify(args: argparse.Namespace, cfg: Config, _client: Client) -> int:
     kind = "deep (reads file content, slow)" if args.deep else "quick (size/mtime only)"
     ok = True
     for job in jobs:
-        for result in ops.verify_job(job, deep=args.deep):
+        for result in ops.verify_job(job, deep=args.deep, remotes=cfg.remotes):
             print(f"{result['status'].upper():<9}{result['label']} [{kind}]  {result['detail']}")
             ok = ok and result["status"] == "ok"
     return 0 if ok else 1

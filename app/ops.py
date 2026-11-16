@@ -11,7 +11,7 @@ from typing import Optional
 
 import portalocker
 
-from . import config, rsync, runner, schedule, settings, state
+from . import config, endpoint, rsync, runner, schedule, settings, state
 from .config import Config, ConfigError, Job
 from .rsync import RsyncError, StopRequest
 
@@ -79,18 +79,31 @@ def stop_job(name: str) -> bool:
     return True
 
 
-def verify_job(job: Job, deep: bool = False, stop: Optional[StopRequest] = None) -> list:
+def _reachable(text: str, job: Job, remotes: Optional[dict]) -> bool:
+    """True when a local directory can be listed or a remote directory answers."""
+    parsed = endpoint.parse(text)
+    if parsed.remote is None:
+        return rsync.check_path_accessible(parsed.path)
+    try:
+        rsync.list_entries(text, job.rsync, remotes)
+    except RsyncError:
+        return False
+    return True
+
+
+def verify_job(job: Job, deep: bool = False, stop: Optional[StopRequest] = None,
+               remotes: Optional[dict] = None) -> list:
     """Compare every pair of a job without syncing. Returns [{label, status, detail}] where status is
     ok, mismatch, skipped or error."""
     results = []
     for pair in job.pairs:
         label = job.label(pair)
-        if not (rsync.check_path_accessible(pair.source) and rsync.check_path_accessible(pair.destination)):
+        if not (_reachable(pair.source, job, remotes) and _reachable(pair.destination, job, remotes)):
             results.append({"label": label, "status": "skipped", "detail": "source or destination not accessible"})
             continue
         try:
             mismatches = rsync.count_diffs(pair.source, pair.destination, job.rsync, exclude=job.pair_excludes(pair),
-                                           checksum=deep, stop=stop)
+                                           checksum=deep, stop=stop, remotes=remotes)
         except RsyncError as exc:
             results.append({"label": label, "status": "error", "detail": str(exc)})
             continue
@@ -136,7 +149,9 @@ def writable_paths(cfg: Config) -> list:
     wanted = {str(settings.DATA_DIR)}
     for job in jobs:
         for pair in job.pairs:
-            wanted.add(pair.destination.rstrip("/") or "/")
+            destination = pair.destination_endpoint()
+            if not destination.remote:
+                wanted.add(destination.path.rstrip("/") or "/")
             if job.pair_backup_dir(pair):
                 wanted.add(job.pair_backup_dir(pair).rstrip("/") or "/")
     return sorted(wanted)

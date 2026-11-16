@@ -12,8 +12,10 @@ job_name: "example"
 
 # One or more source/destination pairs, synced in order. Each pair is reported
 # to the dashboard as its own job (job_name:pair name), and a failing pair never
-# stops the pairs after it. Both paths must be absolute directories, and one may
-# not contain the other.
+# A source or destination is an absolute local directory or `remote:path` for
+# a remote defined under `remotes:` in config.yaml; one side must be local.
+# Both sides of a pair may not contain each other, and one pair may not write
+# where another pair of the job reads or writes.
 pairs:
   - name: "documents"            # optional; defaults to the source's last path component
     source: "/mnt/nas1/documents"
@@ -36,6 +38,12 @@ schedules:
 # Run a quick verify after each pair (default: the global setting).
 # verify_after_sync: true
 
+# Stop the run at this local clock time (HH:MM), for example to keep a long
+# transfer off the network during working hours. A stop is not an error: rsync
+# keeps what it copied and the next run resumes. A slot whose stop time has
+# already passed is skipped.
+# stop_at: "07:00"
+
 # Patterns to skip in every pair, added to config/common_exclude.yaml (which
 # applies to every job while use_common_exclude is true in config.yaml).
 # rsync --exclude pattern syntax: a trailing slash matches a directory, * and ?
@@ -52,11 +60,16 @@ schedules:
 #   preserve_group: false
 #   preserve_permissions: true
 #   numeric_ids: true
-#   whole_file: true
+#   whole_file:
 #   hard_links: false
 #   io_timeout: 300
 #   max_duration: 0
 #   min_free_bytes: 0
 #   backup_dir: ""
 #   backup_dir_retention_days: 30
+#   bwlimit: 0
+#   compress: false
+#   contimeout: 10
+#   max_delete: 0
+#   refuse_empty_source: true
 #   extra_args: []

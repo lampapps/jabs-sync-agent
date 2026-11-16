@@ -15,8 +15,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 
-from . import settings
-from .config import RsyncOptions
+from . import endpoint, settings
+from .config import Remote, RsyncOptions
 
 PARTIAL_TRANSFER_CODES = (23, 24)
 
@@ -38,6 +38,15 @@ _ITEMIZE_LINE_RE = re.compile(r"^([><ch.*][fdLDS*].{9}|\*deleting) ")
 
 _ERROR_TAIL_CHARS = 2000
 
+# What rsync's exit codes mean for the cases an administrator can fix.
+_HINTS = {
+    5: "could not start the daemon protocol: check the module name, user and password",
+    10: "could not connect to the rsync daemon: check host, port and that it is running",
+    25: "stopped because it would delete more files than max_delete allows",
+    30: "timed out while sending or receiving data",
+    35: "timed out waiting for the rsync daemon",
+}
+
 
 class RsyncError(RuntimeError):
     """rsync could not run, or exited with a code other than success or a partial transfer."""
@@ -56,14 +65,26 @@ class StopRequest:
     def __init__(self) -> None:
         self.requested = False
         self._proc: Optional[subprocess.Popen] = None
+        self._children: list = []
         self._lock = threading.Lock()
 
     def request(self) -> None:
         with self._lock:
             self.requested = True
             proc = self._proc
+            children = list(self._children)
         if proc is not None:
             _terminate(proc)
+        for child in children:
+            child.request()
+
+    def link(self, child: "StopRequest") -> None:
+        """Pass this request on to `child` (which can also be requested on its own, for a per-job deadline)."""
+        with self._lock:
+            self._children.append(child)
+            already = self.requested
+        if already:
+            child.request()
 
     def attach(self, proc: subprocess.Popen) -> None:
         with self._lock:
@@ -131,7 +152,9 @@ def _execute(args: list, on_line: Optional[Callable[[str], None]] = None, max_du
 
 
 def _failure(returncode: int, stderr: str) -> RsyncError:
-    return RsyncError(f"rsync failed (exit {returncode}): {stderr.strip()[-_ERROR_TAIL_CHARS:]}", returncode=returncode)
+    hint = f": {_HINTS[returncode]}" if returncode in _HINTS else ""
+    return RsyncError(f"rsync failed (exit {returncode}{hint}): {stderr.strip()[-_ERROR_TAIL_CHARS:]}",
+                      returncode=returncode)
 
 
 def parse_progress_line(line: str) -> Optional[dict]:
@@ -153,7 +176,7 @@ def parse_stats(stdout: str) -> tuple:
     return files, total
 
 
-def build_args(options: RsyncOptions, backup_dir: str = "") -> list:
+def build_args(options: RsyncOptions, backup_dir: str = "", remote: bool = False) -> list:
     """The flags shared by every sync run. Ownership is not kept by default: two hosts rarely share uid/gid maps."""
     args = ["--recursive", "--links", "--times", "--devices", "--specials"]
     if options.preserve_permissions:
@@ -166,37 +189,87 @@ def build_args(options: RsyncOptions, backup_dir: str = "") -> list:
         args.append("--numeric-ids")
     if options.hard_links:
         args.append("--hard-links")
-    args.append("--whole-file" if options.whole_file else "--no-whole-file")
+    whole_file = options.whole_file if options.whole_file is not None else not remote
+    args.append("--whole-file" if whole_file else "--no-whole-file")
     if options.delete:
         args += ["--delete", "--delete-excluded"]
+        if options.max_delete:
+            args.append(f"--max-delete={options.max_delete}")
     args += ["--partial", "--partial-dir=.rsync-partial", "--sparse", "--force", "--human-readable"]
     if options.io_timeout:
         args.append(f"--timeout={options.io_timeout}")
+    if options.bwlimit:
+        args.append(f"--bwlimit={options.bwlimit}")
+    if options.compress:
+        args.append("--compress")
     if backup_dir:
         args += ["--backup", f"--backup-dir={backup_dir}", "--suffix="]
     return args + list(options.extra_args)
 
 
-def _endpoints(source: str, destination: str) -> list:
-    return [source.rstrip("/") + "/", destination.rstrip("/") + "/"]
+def target(text: str, remotes: Optional[dict]) -> tuple:
+    """(rsync argument, Remote or None) for a pair's source or destination."""
+    parsed = endpoint.parse(text)
+    if parsed.remote is None:
+        return parsed.path.rstrip("/") + "/", None
+    remote = (remotes or {}).get(parsed.remote)
+    if remote is None:
+        raise RsyncError(f"remote '{parsed.remote}' is not defined in config.yaml")
+    return remote_url(remote, parsed.path), remote
+
+
+def remote_url(remote: Remote, path: str = "") -> str:
+    user = f"{remote.user}@" if remote.user else ""
+    host = f"[{remote.host}]" if ":" in remote.host else remote.host
+    inside = f"{remote.module}/{path}".rstrip("/")
+    return f"rsync://{user}{host}:{remote.port}/{inside}/"
+
+
+def remote_args(remote: Optional[Remote], options: RsyncOptions) -> list:
+    """Connection flags for a pair that uses a daemon; the password is read from its file, never passed as text."""
+    if remote is None:
+        return []
+    args = [f"--contimeout={options.contimeout}"]
+    if remote.password_file:
+        args.append(f"--password-file={remote.password_file}")
+    return args
+
+
+def list_entries(text: str, options: RsyncOptions, remotes: Optional[dict] = None) -> list:
+    """The names directly inside a local or remote directory (`rsync --list-only`); raises RsyncError if unreadable."""
+    arg, remote = target(text, remotes)
+    returncode, stdout, stderr = _execute([*remote_args(remote, options), "--list-only", "--no-motd", arg], None,
+                                          options.max_duration)
+    if returncode != 0:
+        raise _failure(returncode, stderr)
+    names = []
+    for line in stdout.splitlines():
+        # "drwxr-xr-x   4,096 2024/01/01 12:00:00 name": the name is everything after the date and time.
+        parts = line.split(None, 4)
+        if len(parts) == 5 and parts[4] != ".":
+            names.append(parts[4])
+    return names
 
 
 def sync(source: str, destination: str, options: RsyncOptions, exclude: Optional[list] = None, backup_dir: str = "",
          dry_run: bool = False, on_progress: Optional[Callable[[dict], None]] = None,
-         stop: Optional[StopRequest] = None) -> dict:
-    """Mirror source into destination.
+         stop: Optional[StopRequest] = None, remotes: Optional[dict] = None) -> dict:
+    """Mirror source into destination (each a local path or `remote:path`).
 
     Returns {partial, stopped, files_transferred, bytes_transferred, returncode}. `stopped` is true when a stop was
     requested and rsync ended early; the transfer is then incomplete but not an error.
     """
-    args = build_args(options, backup_dir)
+    source_arg, source_remote = target(source, remotes)
+    destination_arg, destination_remote = target(destination, remotes)
+    remote = source_remote or destination_remote
+    args = build_args(options, backup_dir, remote is not None) + remote_args(remote, options)
     args += [f"--exclude={pattern}" for pattern in exclude or []]
     args.append("--stats")
     if on_progress is not None:
         args.append("--info=progress2")
     if dry_run:
         args.append("--dry-run")
-    args += _endpoints(source, destination)
+    args += [source_arg, destination_arg]
 
     def on_line(line: str) -> None:
         parsed = parse_progress_line(line)
@@ -214,12 +287,15 @@ def sync(source: str, destination: str, options: RsyncOptions, exclude: Optional
 
 
 def count_diffs(source: str, destination: str, options: RsyncOptions, exclude: Optional[list] = None,
-                checksum: bool = False, stop: Optional[StopRequest] = None) -> int:
+                checksum: bool = False, stop: Optional[StopRequest] = None, remotes: Optional[dict] = None) -> int:
     """How many items a dry run would still change; 0 means the two sides agree.
 
     The quick form compares size and mtime only. checksum=True reads every file on both sides (slow).
     """
+    source_arg, source_remote = target(source, remotes)
+    destination_arg, destination_remote = target(destination, remotes)
     args = ["--recursive", "--links", "--times", "--dry-run", "--itemize-changes"]
+    args += remote_args(source_remote or destination_remote, options)
     if options.io_timeout:
         args.append(f"--timeout={options.io_timeout}")
     if options.delete:
@@ -227,7 +303,7 @@ def count_diffs(source: str, destination: str, options: RsyncOptions, exclude: O
     if checksum:
         args.append("--checksum")
     args += [f"--exclude={pattern}" for pattern in exclude or []]
-    args += _endpoints(source, destination)
+    args += [source_arg, destination_arg]
     returncode, stdout, stderr = _execute(args, None, options.max_duration, stop)
     if returncode != 0 and returncode not in PARTIAL_TRANSFER_CODES:
         raise _failure(returncode, stderr)

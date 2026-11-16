@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import Iterator, Optional
 
-from . import kuma, locking, mailer, rsync, settings, state
+from . import kuma, locking, mailer, rsync, schedule, settings, state
 from .config import Config, Job, Pair
 from .dashboard import Client
 from .rsync import RsyncError, StopRequest
@@ -59,9 +59,22 @@ def run_job(job: Job, cfg: Config, client: Client, dry_run: bool = False, stop: 
         logger.error("%s - could not start: %s", job.name, exc)
         return False
     start = time.time()
+    deadline_timer: Optional[threading.Timer] = None
+    if job.stop_at:
+        # The deadline stops only this job; a signal still reaches it through the link.
+        outer, stop = stop, StopRequest()
+        outer.link(stop)
+        now = schedule.local_now()
+        deadline = schedule.stop_deadline(job.stop_at, now)
+        deadline_timer = threading.Timer((deadline - now).total_seconds(), stop.request)
+        deadline_timer.daemon = True
+        deadline_timer.start()
+        logger.info("%s - will stop at %s (stop_at %s)", job.name, deadline.strftime("%Y-%m-%d %H:%M"), job.stop_at)
     try:
         result = _run_pairs(job, cfg, client, dry_run, stop, start)
     finally:
+        if deadline_timer is not None:
+            deadline_timer.cancel()
         locking.release_lock(lock_file)
 
     state.record_run(job.name, {**result, "dry_run": dry_run})
@@ -97,6 +110,41 @@ def _skip_stopped(job: Job, pair: Pair, client: Client, dry_run: bool, job_run_i
     return {"name": pair.resolved_name(), "success": True, "stopped": True, "error": None, "files": 0, "bytes": 0}
 
 
+def _check_password_file(cfg: Config, remote_name: str) -> Optional[str]:
+    remote = cfg.remotes.get(remote_name)
+    if remote is None:
+        return f"Remote '{remote_name}' is not defined in config.yaml"
+    if remote.password_file and not os.path.isfile(remote.password_file):
+        return f"Password file for remote '{remote_name}' not found: {remote.password_file}"
+    return None
+
+
+def _check_source(job: Job, pair: Pair, cfg: Config) -> Optional[str]:
+    """Why the source cannot be mirrored (an error message), or None.
+
+    With delete on, an empty source is refused: a dropped NFS mount looks exactly like an empty folder and
+    mirroring it would wipe the destination.
+    """
+    source = pair.source_endpoint()
+    if source.remote:
+        problem = _check_password_file(cfg, source.remote)
+        if problem:
+            return problem
+        try:
+            empty = not rsync.list_entries(pair.source, job.rsync, cfg.remotes)
+        except RsyncError as exc:
+            return f"Source not accessible: {pair.source} ({exc})"
+    else:
+        if not rsync.check_path_accessible(source.path):
+            return f"Source directory not accessible: {pair.source}"
+        with os.scandir(source.path) as entries:
+            empty = next(entries, None) is None
+    if empty and job.rsync.delete and job.rsync.refuse_empty_source:
+        return (f"Source is empty and delete is on, so it was not mirrored (a missing mount looks empty): "
+                f"{pair.source}. Set rsync.refuse_empty_source: false if an empty source is intended.")
+    return None
+
+
 def _sync_pair(job: Job, pair: Pair, cfg: Config, client: Client, dry_run: bool, stop: StopRequest,
                job_run_id: str) -> dict:
     """Mirror one pair and verify it. A failure here never stops the pairs after it."""
@@ -122,18 +170,24 @@ def _sync_pair(job: Job, pair: Pair, cfg: Config, client: Client, dry_run: bool,
     log.info("  Source : %s", pair.source)
     log.info("  Dest   : %s", pair.destination)
 
-    if not rsync.check_path_accessible(pair.source):
-        return fail(f"Source directory not accessible: {pair.source}")
-    if not dry_run:
+    problem = _check_source(job, pair, cfg)
+    if problem:
+        return fail(problem)
+    destination = pair.destination_endpoint()
+    if destination.remote:
+        problem = _check_password_file(cfg, destination.remote)
+        if problem:
+            return fail(problem)
+    elif not dry_run:
         try:
-            os.makedirs(pair.destination, exist_ok=True)
+            os.makedirs(destination.path, exist_ok=True)
         except OSError as exc:
             return fail(f"Destination cannot be created: {pair.destination} ({exc})")
-    elif not rsync.check_path_accessible(pair.destination):
+    elif not rsync.check_path_accessible(destination.path):
         log.warning("Destination does not exist yet (dry run, not creating it): %s", pair.destination)
 
-    if job.rsync.min_free_bytes and not dry_run:
-        free = rsync.free_space_bytes(pair.destination)
+    if job.rsync.min_free_bytes and not dry_run and not destination.remote:
+        free = rsync.free_space_bytes(destination.path)
         if free is not None and free < job.rsync.min_free_bytes:
             return fail(f"Destination has only {free / GIB:.1f} GiB free "
                         f"(minimum {job.rsync.min_free_bytes / GIB:.1f} GiB): {pair.destination}")
@@ -163,7 +217,8 @@ def _sync_pair(job: Job, pair: Pair, cfg: Config, client: Client, dry_run: bool,
 
     try:
         result = rsync.sync(pair.source, pair.destination, job.rsync, exclude=job.pair_excludes(pair),
-                            backup_dir=run_backup_dir, dry_run=dry_run, on_progress=on_progress, stop=stop)
+                            backup_dir=run_backup_dir, dry_run=dry_run, on_progress=on_progress, stop=stop,
+                            remotes=cfg.remotes)
     except RsyncError as exc:
         return fail(f"Sync failed: {exc}")
 
@@ -208,7 +263,7 @@ def _quick_verify(job: Job, pair: Pair, cfg: Config, client: Client, log, run_id
         log.info("Running quick verify (size/mtime only)")
         client.send_sync_stage(job.name, label, label, "Verifying (quick)", run_id=run_id)
         mismatches = rsync.count_diffs(pair.source, pair.destination, job.rsync, exclude=job.pair_excludes(pair),
-                                       stop=stop)
+                                       stop=stop, remotes=cfg.remotes)
     except RsyncError as exc:
         if stop.requested:
             log.info("Quick verify interrupted by the stop request")

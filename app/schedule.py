@@ -26,6 +26,16 @@ def next_slot(cron: str, now: datetime) -> datetime:
     return croniter(cron, now).get_next(datetime)
 
 
+def stop_deadline(stop_at: str, after: datetime) -> datetime:
+    """The next HH:MM local clock time strictly after `after` (computed on the wall clock, so DST does not skew it)."""
+    hour, minute = (int(part) for part in stop_at.split(":"))
+    naive = after.astimezone().replace(tzinfo=None)
+    candidate = naive.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= naive:
+        candidate += timedelta(days=1)
+    return candidate.astimezone()
+
+
 def due_jobs(jobs: list, data: dict, now: datetime) -> list:
     """Jobs with an unserved slot; marks those slots served in `data` (call inside a state transaction)."""
     due = []
@@ -37,7 +47,11 @@ def due_jobs(jobs: list, data: dict, now: datetime) -> list:
             previous = served.get(cron)
             served[cron] = slot
             if previous is not None and slot > previous:
-                job_due = True
+                slot_time = datetime.fromtimestamp(slot).astimezone()
+                stop_at = getattr(job, "stop_at", None)
+                # A slot whose window already closed (the machine was off) is skipped, not run late.
+                if not (stop_at and now >= stop_deadline(stop_at, slot_time)):
+                    job_due = True
         if job_due:
             due.append(job)
     return due
