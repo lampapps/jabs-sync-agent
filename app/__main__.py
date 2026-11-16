@@ -115,6 +115,8 @@ def build_parser() -> argparse.ArgumentParser:
         return command
 
     add("config", _cmd_config, "validate config.yaml and the job files")
+    add("admin", None, "open the interactive administration console").add_argument(
+        "--unit", help="systemd unit name of this install, if it cannot be detected (e.g. jabs-sync-agent)")
     add("tick", _cmd_tick, "run the periodic work once (driven by the systemd timer)")
     run = add("run", _cmd_run, "run one sync job now")
     run.add_argument("job", help="job name (config/jobs/NAME.yaml) or a path to a job file")
@@ -138,6 +140,10 @@ def main(argv: Optional[list] = None) -> int:
     level = logging.DEBUG if settings.env_mode() == "development" else logging.INFO
     logging.basicConfig(level=level, format=LOG_FORMAT, stream=sys.stderr)
     logging.getLogger().setLevel(level)
+    if args.command == "admin":  # must start even when config.yaml is broken: that is when it is needed
+        from . import admin
+
+        return admin.run(args.unit)
     try:
         cfg = config.load_config()
         client = Client.from_env(cfg)

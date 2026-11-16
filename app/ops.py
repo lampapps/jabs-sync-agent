@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import portalocker
@@ -98,6 +99,24 @@ def verify_job(job: Job, deep: bool = False, stop: Optional[StopRequest] = None)
         else:
             results.append({"label": label, "status": "ok", "detail": "0 mismatched items"})
     return results
+
+
+def delete_job(job: Job) -> None:
+    """Delete a job's file from config/jobs and forget its schedule state. Synced files are never touched.
+
+    Refuses to delete a file outside the jobs directory, or a job that is running.
+    """
+    path = Path(job.path).resolve()
+    if path.parent != settings.JOBS_DIR.resolve() or path.suffix not in (".yaml", ".yml"):
+        raise ConfigError(f"{job.path} is not a file in {settings.JOBS_DIR}; delete it by hand")
+    if job_lock_info(job.name) is not None:
+        raise ConfigError(f"'{job.name}' is running; wait for it to finish")
+    path.unlink()
+    try:
+        with state.transaction() as data:
+            data.get("jobs", {}).pop(job.name, None)
+    except (OSError, portalocker.exceptions.LockException) as exc:
+        logger.warning("deleted %s but could not clear its schedule state: %s", path.name, exc)
 
 
 def reset_state() -> int:

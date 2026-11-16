@@ -1,6 +1,6 @@
 # JABS Sync Agent
 
-Mirrors directories with rsync on a systemd timer; optionally reports to a JABS dashboard. Standalone-capable: everything works without a dashboard. Command line and config files only for now (an admin console is planned). It replaces `local_sync_agent` and will replace `nas_sync_agent`. The shared JABS rules (API, secrets, `VERSION`, tests, README layout) are in [../dashboardv2/AGENTS.md](../dashboardv2/AGENTS.md); read its "JABS-wide conventions" section first.
+Mirrors directories with rsync on a systemd timer; optionally reports to a JABS dashboard. Standalone-capable: everything works without a dashboard. Command line, config files and a Textual admin console. It replaces `local_sync_agent` and will replace `nas_sync_agent`. The shared JABS rules (API, secrets, `VERSION`, tests, README layout) are in [../dashboardv2/AGENTS.md](../dashboardv2/AGENTS.md); read its "JABS-wide conventions" section first.
 
 ## Rules
 
@@ -13,10 +13,11 @@ Mirrors directories with rsync on a systemd timer; optionally reports to a JABS 
 
 ## Stack and layout
 
-- Python 3.11+, pydantic (config only), PyYAML, croniter, portalocker, requests, python-dotenv, textual (reserved for the admin console). Do not add dependencies without asking.
+- Python 3.11+, pydantic (config only), PyYAML, croniter, portalocker, requests, python-dotenv, textual (admin console only). Do not add dependencies without asking.
 - `app/__main__.py` is the CLI (`python -m app <command>`); prefer a new subcommand over a shell script. Shell is only `setup.sh` and `deploy/install.sh`.
+- `app/admin/` is the Textual admin console (`python -m app admin`). Every CLI subcommand must also be doable there: add it to `admin.COVERAGE` and register the action id in a tab's `ACTIONS` (`TestParity` in `tests/test_admin_support.py` fails otherwise). Keep logic in `app/ops.py` so the CLI and console share it; runs and verifies go through `python -m app ...` child processes so they behave exactly like the CLI. Textual is imported lazily so `tick` and `run` never load it.
 - `app/config.py`: pydantic models for `config/config.yaml` and `config/jobs/*.yaml` (`pairs`, `rsync` options); `settings.py` holds paths and env access, read at call time.
-- `app/runner.py` runs one job; `app/tick.py` is the periodic work (isolated tasks); `app/state.py` is `data/state.json`; `app/ops.py` holds what the CLI (and later the console) share; `app/mailer.py`, `app/kuma.py`, `app/locking.py`.
+- `app/runner.py` runs one job; `app/tick.py` is the periodic work (isolated tasks); `app/state.py` is `data/state.json`; `app/ops.py` holds what the CLI and the console share; `app/mailer.py`, `app/kuma.py`, `app/locking.py`.
 - Systemd units are templates in `deploy/`, rendered by `deploy/install.sh`.
 - Config examples are `config/config.example.yaml` and `config/templates/job.yaml`; keep them listing every setting, with comments (`tests/test_config.py` checks).
 

@@ -2,7 +2,7 @@
 
 A JABS (Just Another Backup Script) agent that mirrors directories with [rsync](https://rsync.samba.org/) on a schedule, verifies the mirror, emails failures, and can report to a JABS dashboard. It replaces `local_sync_agent`; the same job format will also cover syncing to a remote NAS.
 
-- **Command line and config files only.** Everything you watch lives on the dashboard.
+- **Command line, config files and an admin console.** There is no GUI on the agent; everything you watch lives on the dashboard. `python -m app admin` is a full-screen console for administering it.
 - **Runs standalone.** Without a dashboard it syncs, verifies and emails exactly the same. The dashboard is optional.
 - **Scheduled by a systemd timer**, not cron. A timer runs `python -m app tick` every 5 minutes; the tick decides which jobs are due.
 - **One way.** Each pair mirrors a source directory into a destination directory.
@@ -16,27 +16,39 @@ A JABS (Just Another Backup Script) agent that mirrors directories with [rsync](
 
 ## Install
 
-```bash
-./setup.sh
-```
+Do these steps as the user that will own the install, in the install directory.
 
-It creates the virtual environment, installs the dependencies and copies the example `config/config.yaml`, `.env` and an example job (never overwriting existing files). If `python3` is older than 3.11, choose another interpreter: `PYTHON=python3.11 ./setup.sh`. Run it as the user that will own the install, not with `sudo`.
-
-Then:
-
-1. Edit `.env` if you want a dashboard (`JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`) or email (`JABS_SMTP_USER`, `JABS_SMTP_PASS`), and `config/config.yaml` for the defaults.
-2. Add jobs in `config/jobs/*.yaml` by copying `config/templates/job.yaml`. Point each pair at real directories and enable a schedule.
-3. Try a job without changing anything:
+1. **Install.**
 
    ```bash
-   .venv/bin/python -m app run JOB --dry-run
+   ./setup.sh
    ```
 
-4. Install the timer:
+   It creates the virtual environment, installs the dependencies and copies the example `config/config.yaml`, `.env` and an example job (never overwriting existing files). If `python3` is older than 3.11, choose another interpreter: `PYTHON=python3.11 ./setup.sh`. Do not run it with `sudo`.
+
+2. **Open the admin console.** The next steps use it; the [Admin console](#admin-console) section lists every tab.
+
+   ```bash
+   .venv/bin/python -m app admin
+   ```
+
+3. **Configure** (tab `3` Files). Select `.env` and press `e` to edit it in your system editor: set the dashboard URL and key and the SMTP login if you want them (`JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `JABS_SMTP_USER`, `JABS_SMTP_PASS`). Do the same for `config.yaml` (rsync defaults, email). The files document themselves, so leave what you do not need. The console checks each file when you close the editor and offers to revert a mistake.
+
+4. **Add your jobs** (tab `1` Jobs). Press `n` to create one from the template and open it in the editor, or `e` to edit the example job. Point each pair at real directories and enable a schedule.
+
+5. **Test email** (tab `4` Diagnostics): press `m` to send a test message. With a dashboard configured, `h` sends one heartbeat to test the link.
+
+6. **Try a job** (tab `1` Jobs): select it and press `d` for a dry run. rsync's output streams in a window and nothing is changed.
+
+7. **Install the timer** (quit the console first, or use another terminal):
 
    ```bash
    sudo deploy/install.sh
    ```
+
+8. **Check it.** In the console, tab `5` Service shows the service and timer and `l` follows the journal; tab `4` Diagnostics `t` runs a tick now.
+
+Every step can also be done on the command line (`python -m app config`, `run JOB --dry-run`; see [Commands](#commands)).
 
 ### What `deploy/install.sh` does
 
@@ -83,6 +95,7 @@ Run as `.venv/bin/python -m app <command>`.
 | Command | Purpose |
 | --- | --- |
 | `config` | Validate `config.yaml` and the job files; shows whether the dashboard is in use |
+| `admin [--unit NAME]` | Open the interactive [admin console](#admin-console) |
 | `tick` | Run what is due and report to the dashboard (the timer does this) |
 | `run JOB [--dry-run]` | Run one job now; `--dry-run` still reports to the dashboard |
 | `stop JOB` | Ask a running job to stop gracefully; it resumes on its next run |
@@ -91,6 +104,23 @@ Run as `.venv/bin/python -m app <command>`.
 | `testmail` | Send a test email with the SMTP settings |
 | `paths` | Print the directories the agent must be able to write |
 | `reset --yes` | Delete lock files and the schedule state (never synced data or your config) |
+
+### Admin console
+
+`.venv/bin/python -m app admin` opens a full-screen console for the person administering the agent: everything the commands above do. Switch tabs with `1` to `6` or the mouse; the footer lists the keys for the current tab; `r` refreshes and `q` quits. It starts even when `config.yaml` is broken, so you can fix it there.
+
+| Tab | What you can do |
+| --- | --- |
+| 1 Jobs | Each job's pairs, schedule, next run, last result and whether it is running now. **Dry run** (`d`) or **Sync now** (`s`) runs the job in a window that streams rsync's output, with a Stop button. **Stop** (`t`) ends a job running anywhere on this machine, gracefully. Edit a job file (`e`), create one from the template (`n`) or delete one (`x`: you type its name to confirm; synced files stay where they are) |
+| 2 Verify | Every pair with its paths. Quick verify (`v`), deep verify (`d`, asks first) or verify all jobs (`a`) without syncing |
+| 3 Files | Check `config.yaml`, `.env`, `common_exclude.yaml` and every job file, and edit any of them in your system editor (`$VISUAL`, `$EDITOR`, else the system default such as nano). A file is validated when you leave the editor: edit again, revert or keep. The agent reads its files at the start of every run, so a valid edit applies at the next tick; if the service needs a directory it was not given (a new destination or `backup_dir`), it offers to reinstall the units |
+| 4 Diagnostics | Run the tick now, send a test mail, test the dashboard link (sends one heartbeat), show the schedule state, list the writable directories, reset the schedule state (typed confirmation) |
+| 5 Service | State of the service and timer; start (runs a tick now), stop, enable or disable the timer, reinstall the units with the options already in use (all through `sudo`), follow the journal |
+| 6 Docs | Read the install's Markdown files; links between documents work and `b` goes back |
+
+A run started from the console is the same `python -m app run JOB` the timer starts, so it takes the same job lock (a job that is already running is refused), reports to the dashboard and emails on failure. A dry run is still reported to the dashboard, marked `[DRY RUN]`. Closing the console stops a run it started.
+
+Run it as the user that owns the install; it refuses to start as root when the install belongs to someone else, because root-owned state files would stop the service from writing its own data. Units are found by their working directory; if that fails, pass `--unit jabs-sync-agent`. Administrative actions are recorded in the journal as `jabs-admin`. It needs the `textual` package, installed by `./setup.sh`.
 
 ### Verifying a mirror
 
