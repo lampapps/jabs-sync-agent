@@ -19,6 +19,7 @@ COVERAGE = {
     "testmail": "diagnostics.testmail",
     "paths": "diagnostics.paths",
     "reset": "diagnostics.reset",
+    "import-local-sync": "files.import",
 }
 # Subcommands that are not administration tasks.
 NOT_COVERED = {"admin"}

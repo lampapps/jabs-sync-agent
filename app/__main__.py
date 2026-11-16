@@ -3,9 +3,10 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
-from . import config, mailer, ops, runner, settings, tick
+from . import config, mailer, migrate, ops, runner, settings, tick
 from .config import Config, ConfigError
 from .dashboard import Client
 from .rsync import StopRequest
@@ -96,6 +97,24 @@ def _cmd_paths(_args: argparse.Namespace, cfg: Config, _client: Client) -> int:
     return 0
 
 
+def _cmd_import(args: argparse.Namespace) -> int:
+    source = Path(args.dir) if args.dir else settings.BASE_DIR.parent / "local_sync_agent"
+    report = migrate.import_local_sync(source, keep_schedules=args.keep_schedules, force=args.force,
+                                       dry_run=args.dry_run)
+    for label in report["written"]:
+        print(f"{'would write' if args.dry_run else 'wrote'} {label}")
+    for label in report["kept"]:
+        print(f"kept the existing {label} (use --force to replace it)")
+    for message in report["warnings"]:
+        print(f"warning: {message}", file=sys.stderr)
+    for message in report["errors"]:
+        print(f"error: {message}", file=sys.stderr)
+    if not report["errors"]:
+        for note in report["notes"]:
+            print(note)
+    return 1 if report["errors"] else 0
+
+
 def _cmd_reset(args: argparse.Namespace, _cfg: Config, _client: Client) -> int:
     if not args.yes:
         print("reset deletes lock files and the schedule state; re-run with --yes to confirm", file=sys.stderr)
@@ -131,6 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
     add("paths", _cmd_paths, "print the directories the agent must be able to write")
     add("reset", _cmd_reset, "delete lock files and schedule state (never synced data)").add_argument(
         "--yes", action="store_true", help="confirm")
+    imp = add("import-local-sync", None, "convert a local_sync_agent install's configuration into this one")
+    imp.add_argument("dir", nargs="?", help="folder of the local_sync_agent install (default: ../local_sync_agent)")
+    imp.add_argument("--keep-schedules", action="store_true", help="keep the enabled schedules (default: import them off)")
+    imp.add_argument("--force", action="store_true", help="replace files that already exist here")
+    imp.add_argument("--dry-run", action="store_true", help="show what would be written and change nothing")
     return parser
 
 
@@ -144,6 +168,8 @@ def main(argv: Optional[list] = None) -> int:
         from . import admin
 
         return admin.run(args.unit)
+    if args.command == "import-local-sync":  # writes config.yaml, so it cannot need a valid one
+        return _cmd_import(args)
     try:
         cfg = config.load_config()
         client = Client.from_env(cfg)
