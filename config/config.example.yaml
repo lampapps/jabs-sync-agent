@@ -83,4 +83,4 @@ email:
       enabled: true
     backup_complete:
       enabled: false
-  from_addr: ""          # blank = the SMTP login name (JABS_SMTP_USER in .env)
+  from_addr: ""          # blank = the SMTP login name (JABS_SMTP_USERNAME in .env)

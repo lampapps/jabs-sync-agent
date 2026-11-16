@@ -7,8 +7,8 @@ from app import settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-ENV_VARS = ("JABS_DASHBOARD_URL", "JABS_AGENT_KEY", "UPTIME_KUMA_URL", "RSYNC_BIN", "JABS_SMTP_USER",
-            "JABS_SMTP_PASS", "ENV_MODE", "JABS_HOME")
+ENV_VARS = ("JABS_DASHBOARD_URL", "JABS_AGENT_KEY", "UPTIME_KUMA_URL", "RSYNC_BIN", "JABS_SMTP_USERNAME",
+            "JABS_SMTP_PASSWORD", "JABS_SMTP_USER", "JABS_SMTP_PASS", "ENV_MODE", "JABS_HOME")
 
 
 @pytest.fixture(autouse=True)

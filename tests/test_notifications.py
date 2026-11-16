@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import requests
 
-from app import kuma, mailer
+from app import kuma, mailer, settings
 from app.config import EmailConfig
 
 
@@ -43,12 +43,27 @@ class TestMailer:
     def test_a_message_is_sent_with_starttls_and_the_login(self, monkeypatch):
         FakeSMTP.instances.clear()
         monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
-        monkeypatch.setenv("JABS_SMTP_USER", "user")
-        monkeypatch.setenv("JABS_SMTP_PASS", "pw")
+        monkeypatch.setenv("JABS_SMTP_USERNAME", "user")
+        monkeypatch.setenv("JABS_SMTP_PASSWORD", "pw")
         assert mailer.send(email(), "Subject", "Body") is True
         server = FakeSMTP.instances[0]
         assert server.started_tls and server.logged_in == ("user", "pw")
         assert server.sent[0]["Subject"] == "Subject" and server.sent[0]["To"] == "a@example.com"
+
+    def test_the_older_short_names_still_log_in(self, monkeypatch):
+        FakeSMTP.instances.clear()
+        monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+        monkeypatch.setenv("JABS_SMTP_USER", "old")
+        monkeypatch.setenv("JABS_SMTP_PASS", "oldpw")
+        assert mailer.send(email(), "Subject", "Body") is True
+        assert FakeSMTP.instances[0].logged_in == ("old", "oldpw")
+
+    def test_the_new_names_win_over_the_old_ones(self, monkeypatch):
+        monkeypatch.setenv("JABS_SMTP_USER", "old")
+        monkeypatch.setenv("JABS_SMTP_PASS", "oldpw")
+        monkeypatch.setenv("JABS_SMTP_USERNAME", "new")
+        monkeypatch.setenv("JABS_SMTP_PASSWORD", "newpw")
+        assert settings.smtp_login() == ("new", "newpw")
 
     def test_development_mode_marks_the_subject(self, monkeypatch):
         FakeSMTP.instances.clear()

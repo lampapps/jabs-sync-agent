@@ -32,7 +32,7 @@ Do these steps as the user that will own the install, in the install directory.
    .venv/bin/python -m app admin
    ```
 
-3. **Configure** (tab `3` Files). Select `.env` and press `e` to edit it in your system editor: set the dashboard URL and key and the SMTP login if you want them (`JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `JABS_SMTP_USER`, `JABS_SMTP_PASS`). Do the same for `config.yaml` (rsync defaults, email). The files document themselves, so leave what you do not need. The console checks each file when you close the editor and offers to revert a mistake.
+3. **Configure** (tab `3` Files). Select `.env` and press `e` to edit it in your system editor: set the dashboard URL and key and the SMTP login if you want them (`JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `JABS_SMTP_USERNAME`, `JABS_SMTP_PASSWORD`). Do the same for `config.yaml` (rsync defaults, email). The files document themselves, so leave what you do not need. The console checks each file when you close the editor and offers to revert a mistake.
 
 4. **Add your jobs** (tab `1` Jobs). Press `n` to create one from the template and open it in the editor, or `e` to edit the example job. Point each pair at real directories and enable a schedule.
 
@@ -48,7 +48,7 @@ Do these steps as the user that will own the install, in the install directory.
 
 8. **Check it.** In the console, tab `5` Service shows the service and timer and `l` follows the journal; tab `4` Diagnostics `t` runs a tick now.
 
-Every step can also be done on the command line (`python -m app config`, `run JOB --dry-run`; see [Commands](#commands)).
+Every step can also be done on the command line (`.venv/bin/python -m app config`, `run JOB --dry-run`; see [Commands](#commands)).
 
 ### What `deploy/install.sh` does
 
@@ -70,7 +70,7 @@ sudo systemctl start jabs-sync-agent      # run a tick now
 
 ## Configuration
 
-`config/config.yaml` (from `config/config.example.yaml`) holds the settings shared by all jobs. A job file in `config/jobs/*.yaml` lists its source and destination pairs and can override `verify_after_sync` and any rsync option. `config/config.example.yaml` documents every global key, and `config/templates/job.yaml` lists every job setting with comments. Patterns every job skips live in `config/common_exclude.yaml`. Secrets live only in `.env`: `JABS_SMTP_USER` and `JABS_SMTP_PASS`, `JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `UPTIME_KUMA_URL`, `RSYNC_BIN`, `ENV_MODE`.
+`config/config.yaml` (from `config/config.example.yaml`) holds the settings shared by all jobs. A job file in `config/jobs/*.yaml` lists its source and destination pairs and can override `verify_after_sync` and any rsync option. `config/config.example.yaml` documents every global key, and `config/templates/job.yaml` lists every job setting with comments. Patterns every job skips live in `config/common_exclude.yaml`. Secrets live only in `.env`: `JABS_SMTP_USERNAME` and `JABS_SMTP_PASSWORD`, `JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `UPTIME_KUMA_URL`, `RSYNC_BIN`, `ENV_MODE`.
 
 Blank values in YAML (`backup_dir:`) mean "use the default". Check the files with `.venv/bin/python -m app config`.
 
@@ -141,13 +141,13 @@ With `backup_dir` set, a file the sync would overwrite or delete on the destinat
 
 ## Dashboard integration (optional)
 
-Set `JABS_DASHBOARD_URL` and `JABS_AGENT_KEY` in `.env` (register the agent on the dashboard host with `python -m app agent add NAME`). Leave them empty, or set `dashboard.enabled: false` in `config.yaml`, to run standalone; `python -m app config` says which mode is active.
+Set `JABS_DASHBOARD_URL` and `JABS_AGENT_KEY` in `.env` (register the agent on the dashboard host with `.venv/bin/python -m app agent add NAME`). Leave them empty, or set `dashboard.enabled: false` in `config.yaml`, to run standalone; `.venv/bin/python -m app config` says which mode is active.
 
 The dashboard receives each run's start, stages, progress about every 5 seconds, completion and verify result, plus a heartbeat with each job's schedule on every tick. Every request carries the machine's **hostname** (`hostname:` in `config.yaml`, else the system name). Dashboard problems are logged and never change a sync's result.
 
 ## Email alerts
 
-Set `email.smtp_server` and `email.to_addrs` in `config.yaml` and the login in `.env`, then send a test with `python -m app testmail`. By default a failed pair and a verify mismatch send a message (`notify_on.error`); `notify_on.backup_complete` adds one per finished pair. A stop sends nothing.
+Set `email.smtp_server` and `email.to_addrs` in `config.yaml` and the login in `.env`, then send a test with `.venv/bin/python -m app testmail`. By default a failed pair and a verify mismatch send a message (`notify_on.error`); `notify_on.backup_complete` adds one per finished pair. A stop sends nothing.
 
 ## Logs and troubleshooting
 
