@@ -665,6 +665,15 @@ class TestDiagnostics:
         drive(scenario)
         assert child == [["testmail"]]
 
+    def test_test_remotes_runs_the_cli_command(self, two_jobs, child):
+        async def scenario(app, pilot):
+            await open_tab(pilot, "4")
+            pane_button(app, DiagnosticsPane, "remotes").press()
+            await wait_for(pilot, lambda: "ARGS" in run_output(app))
+
+        drive(scenario)
+        assert child == [["remotes"]]
+
     def test_dashboard_link_in_standalone_mode_explains_how_to_enable_it(self, two_jobs):
         async def scenario(app, pilot):
             await open_tab(pilot, "4")

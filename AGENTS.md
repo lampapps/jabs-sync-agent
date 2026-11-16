@@ -1,6 +1,6 @@
 # JABS Sync Agent
 
-Mirrors directories with rsync on a systemd timer; optionally reports to a JABS dashboard. Standalone-capable: everything works without a dashboard. Command line, config files and a Textual admin console. It replaces `local_sync_agent` and will replace `nas_sync_agent`. The shared JABS rules (API, secrets, `VERSION`, tests, README layout) are in [../dashboardv2/AGENTS.md](../dashboardv2/AGENTS.md); read its "JABS-wide conventions" section first.
+Mirrors directories with rsync on a systemd timer; optionally reports to a JABS dashboard. Standalone-capable: everything works without a dashboard. Command line, config files and a Textual admin console. It replaces `local_sync_agent` and `nas_sync_agent`. The shared JABS rules (API, secrets, `VERSION`, tests, README layout) are in [../dashboardv2/AGENTS.md](../dashboardv2/AGENTS.md); read its "JABS-wide conventions" section first.
 
 ## Rules
 
@@ -8,7 +8,9 @@ Mirrors directories with rsync on a systemd timer; optionally reports to a JABS 
 - `app/rsync.py` is the only module that runs the `rsync` binary. Never put a credential on a command line or in a log.
 - API contract with the dashboard: the v1 endpoints `/api/monitoring/events` and `/api/monitoring/target-purged`. Every payload carries `hostname`. See `../dashboardv2/docs/AGENTS_API_GUIDE.md`. Each pair is its own target (`job_name:pair name`) and keeps the same `target_id` on every run; one `job_run_id` is shared by all pairs of a run.
 - A stop (`stop`, `SIGTERM`, `Ctrl-C`) is not an error: report it as `stopped`, send no alert, and let the next run resume through `--partial-dir`. A stop must never leave a pair showing as running.
-- Never delete or overwrite data outside a pair's destination and its `backup_dir`. A source and a destination must not contain each other (`--delete` would destroy data).
+- Never delete or overwrite data outside a pair's destination and its `backup_dir`. A source and a destination must not contain each other (`--delete` would destroy data), and no pair of a job may write where another reads or writes (`endpoint.overlap`, checked in `config.py`).
+- A pair side is a local absolute path or `remote:path` (`app/endpoint.py`); remotes are rsync daemons declared in `config.yaml`. Never put a remote's password anywhere but its `password_file` (`--password-file`), and never allow a remote on both sides of a pair. Keep the delete guards (`refuse_empty_source`, `max_delete`): a dropped mount must not wipe a destination.
+- `stop_at` is a per-job deadline that stops only its own job (a linked `StopRequest`) and is reported as `stopped`; `schedule.due_jobs` skips a slot whose window has already closed.
 - Scheduling is by systemd timer running `python -m app tick`; there is no cron and no daemon. Due-ness is state based (`app/schedule.py`), so it is correct at any tick interval.
 
 ## Stack and layout
@@ -31,5 +33,5 @@ Mirrors directories with rsync on a systemd timer; optionally reports to a JABS 
 
 ## Testing
 
-- pytest (`requirements-dev.txt`): `.venv/bin/python -m pytest -q`. Tests use the `home` fixture so the real config, `.env` and state are never touched; the rsync tests run the real binary on temporary directories and are skipped when rsync is missing.
+- pytest (`requirements-dev.txt`): `.venv/bin/python -m pytest -q`. Tests use the `home` fixture so the real config, `.env` and state are never touched; the rsync tests run the real binary on temporary directories and a real `rsync --daemon` on loopback (`tests/test_remotes.py`), and are skipped when rsync is missing.
 - Add or update tests with every non-trivial change.

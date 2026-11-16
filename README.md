@@ -1,11 +1,12 @@
 # JABS Sync Agent
 
-A JABS (Just Another Backup Script) agent that mirrors directories with [rsync](https://rsync.samba.org/) on a schedule, verifies the mirror, emails failures, and can report to a JABS dashboard. It replaces `local_sync_agent`; the same job format will also cover syncing to a remote NAS.
+A JABS (Just Another Backup Script) agent that mirrors directories with [rsync](https://rsync.samba.org/) on a schedule, verifies the mirror, emails failures, and can report to a JABS dashboard. It replaces `local_sync_agent` and `nas_sync_agent`: a pair can mirror between local or NFS-mounted paths, or to and from a NAS that runs an rsync daemon (for example over Tailscale).
 
 - **Command line, config files and an admin console.** There is no GUI on the agent; everything you watch lives on the dashboard. `python -m app admin` is a full-screen console for administering it.
 - **Runs standalone.** Without a dashboard it syncs, verifies and emails exactly the same. The dashboard is optional.
 - **Scheduled by a systemd timer**, not cron. A timer runs `python -m app tick` every 5 minutes; the tick decides which jobs are due.
 - **One way.** Each pair mirrors a source directory into a destination directory.
+- **Can stop at a clock time.** A job's `stop_at` ends the run at, say, 07:00 and the next run resumes where it stopped.
 
 ## Requirements
 
@@ -74,6 +75,41 @@ sudo systemctl start jabs-sync-agent      # run a tick now
 
 Blank values in YAML (`backup_dir:`) mean "use the default". Check the files with `.venv/bin/python -m app config`.
 
+### Remotes
+
+A pair's `source` or `destination` is an absolute local directory, or `name:path` for a remote declared under `remotes:` in `config.yaml`. A remote is an [rsync daemon](https://rsync.samba.org/ftp/rsync/rsyncd.conf.html) module, such as the one a NAS exposes. One side of a pair must be local, because rsync cannot copy between two remotes.
+
+```yaml
+remotes:
+  nas2:
+    host: "nas2.tailnet.ts.net"        # Tailscale name or IP
+    module: "backup"                   # [backup] in the daemon's rsyncd.conf
+    user: "jabs"
+    password_file: "/home/jim/.config/jabs/nas2.secret"
+    port: 873
+```
+
+The password file holds only the module password and must be readable by the agent's user alone (`chmod 600`). The password never appears on a command line, in a log or in YAML. Add the user to the module's `auth users` and `secrets file` on the NAS (`jabs:PASSWORD`, also `chmod 600`). Check the connection with `.venv/bin/python -m app remotes` (tab `4` Diagnostics, `n`); with Tailscale installed it also says whether the connection is direct or relayed, since a relayed one is far slower.
+
+With a remote involved, delta transfer is used instead of whole-file copies (`whole_file` left blank decides), `contimeout` bounds the wait for the daemon, and `bwlimit` (KiB/s) and `compress` are there if the link needs them. `backup_dir` is not available for a remote destination, because rsync resolves it on the NAS.
+
+A job that mirrors in both directions is one job with two ordered pairs; they run in the order listed:
+
+```yaml
+job_name: "nas-sync"
+stop_at: "07:00"
+pairs:
+  - source: "/mnt/nas1/dirA"
+    destination: "nas2:dirA"
+  - source: "nas2:dirB"
+    destination: "/mnt/nas1/dirB"
+schedules:
+  - cron: "0 19 * * *"
+    enabled: true
+```
+
+The config check rejects a pair that writes where another pair reads or writes, because with `delete` on that loop would remove data.
+
 ## Usage
 
 ### Scheduling
@@ -87,6 +123,10 @@ Each job lists schedules as 5-field cron expressions (`schedules: [{cron: "0 2 *
 - Jobs run one after another within a tick, and a job already running (a manual `run`) is skipped.
 
 The tick every 5 minutes means a job starts up to 5 minutes after its scheduled time. For tighter timing change `OnCalendar` in `deploy/agent.timer` and run `deploy/install.sh` again.
+
+### Stopping at a clock time
+
+`stop_at: "HH:MM"` in a job (local time) ends the job at the next such time after it starts, for example to keep a long transfer off the network during the working day. It works like `stop JOB`: rsync keeps its partial file, the dashboard shows the run as `stopped`, no alert is sent, and the next scheduled run resumes. If the machine was off and a slot is picked up after its stop time has passed, that slot is skipped instead of starting a run that would stop at once. The deadline applies to manual `run` too, and only to its own job.
 
 ### Commands
 
@@ -103,6 +143,7 @@ Run as `.venv/bin/python -m app <command>`.
 | `jobs` | Each job's next scheduled run and last result |
 | `import-local-sync [DIR] [--keep-schedules] [--force] [--dry-run]` | Convert a `local_sync_agent` install's configuration into this one (see [Migrating from local_sync_agent](#migrating-from-local_sync_agent)) |
 | `testmail` | Send a test email with the SMTP settings |
+| `remotes` | Connect to every remote in `config.yaml` and report whether it works |
 | `paths` | Print the directories the agent must be able to write |
 | `reset --yes` | Delete lock files and the schedule state (never synced data or your config) |
 
@@ -115,7 +156,7 @@ Run as `.venv/bin/python -m app <command>`.
 | 1 Jobs | Each job's pairs, schedule, next run, last result and whether it is running now. **Dry run** (`d`) or **Sync now** (`s`) runs the job in a window that streams rsync's output, with a Stop button. **Stop** (`t`) ends a job running anywhere on this machine, gracefully. Edit a job file (`e`), create one from the template (`n`) or delete one (`x`: you type its name to confirm; synced files stay where they are) |
 | 2 Verify | Every pair with its paths. Quick verify (`v`), deep verify (`d`, asks first) or verify all jobs (`a`) without syncing |
 | 3 Files | Check `config.yaml`, `.env`, `common_exclude.yaml` and every job file, and edit any of them in your system editor (`$VISUAL`, `$EDITOR`, else the system default such as nano). A file is validated when you leave the editor: edit again, revert or keep. The agent reads its files at the start of every run, so a valid edit applies at the next tick; if the service needs a directory it was not given (a new destination or `backup_dir`), it offers to reinstall the units. **Import from local_sync_agent** (`i`) converts an old install's configuration |
-| 4 Diagnostics | Run the tick now, send a test mail, test the dashboard link (sends one heartbeat), show the schedule state, list the writable directories, reset the schedule state (typed confirmation) |
+| 4 Diagnostics | Run the tick now, send a test mail, test the dashboard link (sends one heartbeat), test the remotes, show the schedule state, list the writable directories, reset the schedule state (typed confirmation) |
 | 5 Service | State of the service and timer; start (runs a tick now), stop, enable or disable the timer, reinstall the units with the options already in use (all through `sudo`), follow the journal |
 | 6 Docs | Read the install's Markdown files; links between documents work and `b` goes back |
 
@@ -149,8 +190,8 @@ With `backup_dir` set, a file the sync would overwrite or delete on the destinat
 ## How it works
 
 - **A job is a list of pairs.** Each pair mirrors one source into one destination with `rsync` and is reported to the dashboard as its own job (`job_name:pair name`). A failing pair never stops the pairs after it.
-- **Defaults suit a LAN or NFS mount:** whole-file copies, no ownership, a 300 second idle timeout, resumable partial files (`--partial-dir`), and `--delete` so the destination is an exact mirror. Set `delete: false` for an append-only copy.
-- **Safety:** a source and a destination may not contain each other, a missing or unreadable source fails the pair before rsync starts, and `min_free_bytes` refuses to sync into a nearly full destination.
+- **Defaults suit a LAN or NFS mount:** whole-file copies between local paths, no ownership, a 300 second idle timeout, resumable partial files (`--partial-dir`), and `--delete` so the destination is an exact mirror. Set `delete: false` for an append-only copy.
+- **Safety:** a source and a destination may not contain each other, a missing or unreadable source fails the pair before rsync starts, and `min_free_bytes` refuses to sync into a nearly full destination. With `delete` on, a source with no files at all fails the pair (`refuse_empty_source`), because a dropped NFS mount looks exactly like an empty folder and would wipe the destination; and `max_delete` fails a pair rather than let one run delete more than that many files.
 - **Stopping is not an error.** `stop JOB`, `SIGTERM` and `Ctrl-C` end the running rsync gracefully. rsync keeps its partial file, the dashboard shows the run as `stopped`, no alert is sent, and the next run carries on. Pairs that had not started are finalized as stopped.
 - **No database.** The agent keeps a lock file per job and a small `data/state.json` (which schedule slots were served and each job's last result).
 - Exit codes 23 and 24 from rsync (some files skipped or vanished) are a warning, not a failure.
@@ -181,6 +222,11 @@ Set `ENV_MODE=development` in `.env` for DEBUG level.
 | `could not start: Could not acquire lock` | Another run of the same job is still going (a manual `run` or the previous tick) |
 | `Source directory not accessible` | A mount dropped, or the path in the job is wrong |
 | `Destination has only N GiB free` | `min_free_bytes` is set and the destination is nearly full |
+| `Source is empty and delete is on` | The source mount is missing (or really empty: set `refuse_empty_source: false`) |
+| `could not connect to the rsync daemon` | Wrong host or port, the daemon is not running, or Tailscale is down on this machine; try `remotes` |
+| `check the module name, user and password` | The module, `user` or the content of `password_file` is wrong |
+| `would delete more files than max_delete allows` | A mass deletion was blocked; check that the source is complete, then raise `max_delete` or run once without it |
+| `Password file for remote ... not found` | `password_file` of the remote points at a missing file |
 | `Sync completed with warnings (partial transfer)` | rsync hit vanished or unreadable files mid-run (exit 23 or 24) |
 | `rsync binary not found` | Install rsync, or set `RSYNC_BIN` in `.env` |
 | Quick verify keeps finding mismatches | Something else writes to the destination, or `delete` differs from the sync |
@@ -188,7 +234,7 @@ Set `ENV_MODE=development` in `.env` for DEBUG level.
 
 ## Security
 
-No encryption or authentication is used for the transfer: source and destination are local or NFS-mounted paths on a trusted LAN. The dashboard key and SMTP login are kept in `.env`, which `setup.sh` makes owner-only and git ignores. The service runs as an unprivileged user in a read-only sandbox that can write only the directories listed by `python -m app paths`.
+No encryption or authentication is used for a local or NFS-mounted transfer: those paths are on a trusted LAN. The rsync daemon protocol to a remote is authenticated by a password but **not encrypted**, so use it only over a network that already is, such as Tailscale (WireGuard). Remote passwords are read from `chmod 600` files, never from a command line or a log. The dashboard key and SMTP login are kept in `.env`, which `setup.sh` makes owner-only and git ignores. The service runs as an unprivileged user in a read-only sandbox that can write only the directories listed by `python -m app paths`.
 
 ## Development
 

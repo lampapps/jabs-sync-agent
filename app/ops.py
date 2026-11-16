@@ -5,6 +5,8 @@ import logging
 import os
 import shutil
 import signal
+import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -77,6 +79,52 @@ def stop_job(name: str) -> bool:
     except PermissionError as exc:
         raise ConfigError(f"'{name}' runs as another user (pid {pid}); run this command as that user") from exc
     return True
+
+
+def tailscale_route(host: str) -> Optional[str]:
+    """'direct' or 'relay' (through a DERP server, which is much slower) for a Tailscale peer, or None when the
+    tailscale client is not installed or the host does not answer."""
+    binary = shutil.which("tailscale")
+    if not binary:
+        return None
+    try:
+        done = subprocess.run([binary, "ping", "--c", "1", "--timeout", "5s", "--until-direct=false", host],
+                              capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_tailscale_ping(done.stdout)
+
+
+def parse_tailscale_ping(output: str) -> Optional[str]:
+    for line in output.splitlines():
+        if line.startswith("pong from"):
+            return "relay" if "via DERP" in line else "direct"
+    return None
+
+
+def check_remotes(cfg: Config) -> list:
+    """Connect to every remote and list its module root. Returns [{name, ok, detail}]."""
+    results = []
+    for name, remote in sorted(cfg.remotes.items()):
+        where = f"{remote.host}:{remote.port}/{remote.module}"
+        if remote.password_file and not os.path.isfile(remote.password_file):
+            results.append({"name": name, "ok": False, "detail": f"{where}: password file not found: "
+                                                                  f"{remote.password_file}"})
+            continue
+        started = time.monotonic()
+        try:
+            entries = rsync.list_entries(f"{name}:", cfg.rsync, cfg.remotes)
+        except RsyncError as exc:
+            results.append({"name": name, "ok": False, "detail": f"{where}: {' '.join(str(exc).split())}"})
+            continue
+        detail = f"{where}: connected in {time.monotonic() - started:.1f}s, {len(entries)} item(s) at the module root"
+        route = tailscale_route(remote.host)
+        if route == "relay":
+            detail += "; Tailscale is relaying this connection (DERP), so transfers will be slow"
+        elif route == "direct":
+            detail += "; Tailscale connection is direct"
+        results.append({"name": name, "ok": True, "detail": detail})
+    return results
 
 
 def _reachable(text: str, job: Job, remotes: Optional[dict]) -> bool:

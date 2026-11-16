@@ -18,6 +18,7 @@ COVERAGE = {
     "jobs": "jobs.list",
     "testmail": "diagnostics.testmail",
     "paths": "diagnostics.paths",
+    "remotes": "diagnostics.remotes",
     "reset": "diagnostics.reset",
     "import-local-sync": "files.import",
 }

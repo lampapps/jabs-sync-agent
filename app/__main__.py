@@ -92,6 +92,17 @@ def _cmd_testmail(_args: argparse.Namespace, cfg: Config, _client: Client) -> in
     return 0
 
 
+def _cmd_remotes(_args: argparse.Namespace, cfg: Config, _client: Client) -> int:
+    if not cfg.remotes:
+        print("no remotes are defined in config.yaml", file=sys.stderr)
+        return 1
+    ok = True
+    for result in ops.check_remotes(cfg):
+        print(f"{'OK' if result['ok'] else 'FAILED':<8}{result['name']}  {result['detail']}")
+        ok = ok and result["ok"]
+    return 0 if ok else 1
+
+
 def _cmd_paths(_args: argparse.Namespace, cfg: Config, _client: Client) -> int:
     print("\n".join(ops.writable_paths(cfg)))
     return 0
@@ -147,6 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--deep", action="store_true", help="read and compare file content (slow)")
     add("jobs", _cmd_jobs, "list jobs with their next and last run")
     add("testmail", _cmd_testmail, "send a test message with the email settings")
+    add("remotes", _cmd_remotes, "connect to every remote in config.yaml and report whether it works")
     add("paths", _cmd_paths, "print the directories the agent must be able to write")
     add("reset", _cmd_reset, "delete lock files and schedule state (never synced data)").add_argument(
         "--yes", action="store_true", help="confirm")

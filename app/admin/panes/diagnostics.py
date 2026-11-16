@@ -21,12 +21,13 @@ class DiagnosticsPane(Pane):
     ACTIONS = {
         "diagnostics.tick": "do_tick", "diagnostics.testmail": "do_testmail",
         "diagnostics.paths": "do_paths", "diagnostics.reset": "do_reset",
+        "diagnostics.remotes": "do_remotes",
         "diagnostics.dashboard": "do_dashboard", "diagnostics.state": "do_state",
     }
     BINDINGS = [
         Binding("t", "tick", "Run tick"), Binding("m", "testmail", "Test mail"),
         Binding("h", "dashboard", "Dashboard link"), Binding("e", "state", "State"), Binding("p", "paths", "Paths"),
-        Binding("z", "reset", "Reset state"),
+        Binding("z", "reset", "Reset state"), Binding("n", "remotes", "Test remotes"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -36,6 +37,7 @@ class DiagnosticsPane(Pane):
             yield Button("Run tick now", id="tick", variant="primary")
             yield Button("Test mail", id="testmail")
             yield Button("Dashboard link", id="dashboard")
+            yield Button("Test remotes", id="remotes")
         with Horizontal(classes="buttons"):
             yield Button("Show state", id="state")
             yield Button("Writable paths", id="paths")
@@ -57,6 +59,9 @@ class DiagnosticsPane(Pane):
 
     async def do_testmail(self) -> None:
         await self.admin.run_command("Test mail", ["testmail"])
+
+    async def do_remotes(self) -> None:
+        await self.admin.run_command("Test remotes", ["remotes"])
 
     async def do_dashboard(self) -> None:
         cfg = await asyncio.to_thread(config.load_config)
@@ -112,6 +117,9 @@ class DiagnosticsPane(Pane):
 
     def action_dashboard(self) -> None:
         self.admin.spawn(self.do_dashboard)
+
+    def action_remotes(self) -> None:
+        self.admin.spawn(self.do_remotes)
 
     def action_state(self) -> None:
         self.admin.spawn(self.do_state)

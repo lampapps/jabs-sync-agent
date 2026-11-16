@@ -13,7 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import endpoint, rsync, runner, schedule, state
+from app import endpoint, ops, rsync, runner, schedule, state
+from app.__main__ import main
 from app.config import Config, ConfigError, Remote, RsyncOptions, find_job, load_config, load_job
 from app.rsync import RsyncError, StopRequest
 
@@ -383,3 +384,35 @@ class TestStopAt:
         assert runner.run_job(job, Config(), client, stop=outer) is True
         assert client.first("send_sync_complete")[2]["stopped"] is True
         assert not (tmp_path / "dst").exists()
+
+
+class TestRemotesCommand:
+    def test_parse_tailscale_ping(self):
+        assert ops.parse_tailscale_ping("pong from nas2 (100.64.0.2) via 203.0.113.5:41641 in 21ms\n") == "direct"
+        assert ops.parse_tailscale_ping("pong from nas2 (100.64.0.2) via DERP(fra) in 48ms\n") == "relay"
+        assert ops.parse_tailscale_ping("ping timed out\n") is None
+
+    def test_no_remotes_is_reported(self, home, capsys):
+        write_config(home)
+        assert main(["remotes"]) == 1
+        assert "no remotes" in capsys.readouterr().err
+
+    def test_a_missing_password_file_is_reported_without_connecting(self, home, capsys, monkeypatch):
+        monkeypatch.setattr(ops, "tailscale_route", lambda host: None)
+        write_config(home, remote_config())
+        assert main(["remotes"]) == 1
+        out = capsys.readouterr().out
+        assert "FAILED" in out and "password file not found" in out
+
+    @requires_rsync
+    def test_a_working_and_a_broken_remote(self, home, daemon, capsys, monkeypatch):
+        monkeypatch.setattr(ops, "tailscale_route", lambda host: "relay")
+        write_config(home, f"remotes:\n  good:\n    host: 127.0.0.1\n    module: backup\n    user: jabs\n"
+                           f"    password_file: {daemon.password}\n    port: {daemon.port}\n"
+                           f"  dead:\n    host: 127.0.0.1\n    module: backup\n    port: {free_port()}\n"
+                           "rsync:\n  contimeout: 2\n")
+        assert main(["remotes"]) == 1
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0].startswith("FAILED") and "dead" in lines[0] and "could not connect" in lines[0]
+        assert lines[1].startswith("OK") and "good" in lines[1] and "relaying" in lines[1]
+        assert daemon.password.read_text() not in "".join(lines)
