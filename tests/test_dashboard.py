@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
+from app import dashboard
 from app.config import Config
 from app.dashboard import Client
 
@@ -93,6 +94,31 @@ class TestEvents:
         client().send_job_schedule("job", "0 2 * * *")
         body = posts.calls[0].json
         assert body["cron_schedule"] == "0 2 * * *" and body["job_name"] == "job" and "target_id" not in body
+
+
+class TestJobs:
+    def test_the_jobs_go_to_the_v2_endpoint_with_the_hostname(self, posts):
+        jobs = [{"job_name": "j", "targets": [{"name": "p", "source": "/a", "destination": "nas2:a"}]}]
+        assert client().send_jobs(jobs) is True
+        call = posts.calls[0]
+        assert call.url == "http://dash:5002/api/v2/jobs" and call.headers == {"X-API-Key": "key"}
+        assert call.json == {"hostname": "host1", "jobs": jobs}
+
+    def test_standalone_sends_nothing(self, posts):
+        assert Client().send_jobs([]) is False and posts.calls == []
+
+    def test_an_old_dashboard_without_the_endpoint_is_not_a_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(requests, "post", Posts(status=404))
+        with caplog.at_level(logging.DEBUG):
+            assert client().send_jobs([]) is False
+        assert [r.levelno for r in caplog.records if "/api/v2/jobs" in r.getMessage()] == [logging.DEBUG]
+
+    def test_every_pair_is_a_target(self):
+        pairs = [SimpleNamespace(resolved_name=lambda: "backups", source="/mnt/backups", destination="nas2:jof"),
+                 SimpleNamespace(resolved_name=lambda: "kpf", source="nas2:kpf", destination="/mnt/kpf")]
+        assert dashboard.jobs_payload([SimpleNamespace(name="UNAS", pairs=pairs)]) == [{"job_name": "UNAS", "targets": [
+            {"name": "backups", "source": "/mnt/backups", "destination": "nas2:jof"},
+            {"name": "kpf", "source": "nas2:kpf", "destination": "/mnt/kpf"}]}]
 
 
 class TestFailures:

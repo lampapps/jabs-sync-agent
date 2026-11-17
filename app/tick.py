@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from . import config, runner, schedule, state
+from . import config, dashboard, runner, schedule, state
 from .config import Config
 from .dashboard import Client
 from .rsync import StopRequest
@@ -32,6 +32,7 @@ class Tick:
             crons = job.enabled_crons()
             if crons:
                 self.client.send_job_schedule(job.name, ",".join(crons))
+        self.client.send_jobs(dashboard.jobs_payload(self.jobs))
 
     def run_due_jobs(self) -> None:
         with runner.stop_on_signals(self.stop):

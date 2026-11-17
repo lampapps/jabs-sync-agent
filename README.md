@@ -13,7 +13,7 @@ A JABS (Just Another Backup Script) agent that mirrors directories with [rsync](
 - Python 3.11 or newer with `python3-venv`
 - [rsync](https://rsync.samba.org/) 3.x
 - systemd, for the timer (without it, run `python -m app tick` from anything that can run a command every few minutes)
-- Optional: a JABS dashboard (`dashboardv2`) to report to
+- Optional: a JABS dashboard (`dashboardv2`) to report to; the job list on its Agents page needs dashboard 0.3.0 or newer
 
 ## Install
 
@@ -184,7 +184,7 @@ With `backup_dir` set, a file the sync would overwrite or delete on the destinat
 
 Set `JABS_DASHBOARD_URL` and `JABS_AGENT_KEY` in `.env` (register the agent on the dashboard host with `.venv/bin/python -m app agent add NAME`). Leave them empty, or set `dashboard.enabled: false` in `config.yaml`, to run standalone; `.venv/bin/python -m app config` says which mode is active.
 
-The dashboard receives each run's start, stages, progress about every 5 seconds, completion and verify result, plus a heartbeat with each job's schedule on every tick. Every request carries the machine's **hostname** (`hostname:` in `config.yaml`, else the system name). Dashboard problems are logged and never change a sync's result.
+The dashboard receives each run's start, stages, progress about every 5 seconds, completion and verify result, plus a heartbeat with each job's schedule on every tick, and with it each job's pairs (source and destination), which the Agents page lists beside the schedule. Every request carries the machine's **hostname** (`hostname:` in `config.yaml`, else the system name). Dashboard problems are logged and never change a sync's result.
 
 ## Email alerts
 

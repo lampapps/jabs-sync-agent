@@ -55,13 +55,14 @@ class Client:
             logger.debug("dashboard request %s failed: %s", path, exc)
             return None
 
-    def _post_ok(self, path: str, payload: dict, ok: tuple = (200, 201)) -> bool:
+    def _post_ok(self, path: str, payload: dict, ok: tuple = (200, 201), quiet: tuple = ()) -> bool:
         response = self._post(path, payload)
         if response is None:
             return False
         if response.status_code in ok:
             return True
-        logger.warning("dashboard rejected %s: %s %s", path, response.status_code, response.text[:200])
+        level = logging.DEBUG if response.status_code in quiet else logging.WARNING
+        logger.log(level, "dashboard rejected %s: %s %s", path, response.status_code, response.text[:200])
         return False
 
     # ------------------------------------------------------------ events
@@ -147,3 +148,14 @@ class Client:
         """Bare heartbeat carrying a job's cron schedule(s), which the dashboard uses for "next run"."""
         return self.send_event("heartbeat", f"{job_name} schedule: {cron_schedule}", job_name=job_name,
                                cron_schedule=cron_schedule)
+
+    def send_jobs(self, jobs: list) -> bool:
+        """Every configured job with each pair's source and destination, for the Agents page; needs dashboard 0.3.0+."""
+        return self._post_ok("/api/v2/jobs", {"hostname": self.hostname, "jobs": jobs}, quiet=(404,))
+
+
+def jobs_payload(jobs: list) -> list:
+    """What /api/v2/jobs takes: one target per pair, as written in the job file (a remote is `name:path`, no secrets)."""
+    return [{"job_name": job.name, "targets": [
+        {"name": pair.resolved_name(), "source": pair.source, "destination": pair.destination} for pair in job.pairs]}
+        for job in jobs]
