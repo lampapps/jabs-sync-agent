@@ -201,6 +201,7 @@ class JobFile(_Model):
     verify_after_sync: Optional[bool] = None
     rsync: dict = Field(default_factory=dict)
     exclude: list[str] = Field(default_factory=list)
+    use_common_exclude: Optional[bool] = None   # None = the global setting
     stop_at: Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM local time
 
     @field_validator("rsync")
@@ -322,7 +323,8 @@ def load_job(path: PathLike, cfg: Config) -> Job:
         raw = JobFile.model_validate(_read_mapping(path))
     except ValidationError as exc:
         raise ConfigError(_format_errors(path, exc)) from exc
-    exclude = (_common_excludes() if cfg.use_common_exclude else []) + raw.exclude
+    use_common = cfg.use_common_exclude if raw.use_common_exclude is None else raw.use_common_exclude
+    exclude = (_common_excludes() if use_common else []) + raw.exclude
     pairs = [pair.model_copy(update={"name": pair.resolved_name()}) for pair in raw.pairs]
     rsync = RsyncOptions.model_validate({**cfg.rsync.model_dump(), **_set_keys(raw.rsync)})
     for pair in pairs:

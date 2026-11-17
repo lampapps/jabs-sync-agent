@@ -71,7 +71,7 @@ sudo systemctl start jabs-sync-agent      # run a tick now
 
 ## Configuration
 
-`config/config.yaml` (from `config/config.example.yaml`) holds the settings shared by all jobs. A job file in `config/jobs/*.yaml` lists its source and destination pairs and can override `verify_after_sync` and any rsync option. `config/config.example.yaml` documents every global key, and `config/templates/job.yaml` lists every job setting with comments. Patterns every job skips live in `config/common_exclude.yaml`. Secrets live only in `.env`: `JABS_SMTP_USERNAME` and `JABS_SMTP_PASSWORD`, `JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `UPTIME_KUMA_URL`, `RSYNC_BIN`, `ENV_MODE`.
+`config/config.yaml` (from `config/config.example.yaml`) holds the settings shared by all jobs. A job file in `config/jobs/*.yaml` lists its source and destination pairs and can override `verify_after_sync`, `use_common_exclude` and any rsync option. `config/config.example.yaml` documents every global key, and `config/templates/job.yaml` lists every job setting with comments. Patterns every job skips live in `config/common_exclude.yaml`. Secrets live only in `.env`: `JABS_SMTP_USERNAME` and `JABS_SMTP_PASSWORD`, `JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `UPTIME_KUMA_URL`, `RSYNC_BIN`, `ENV_MODE`.
 
 Blank values in YAML (`backup_dir:`) mean "use the default". Check the files with `.venv/bin/python -m app config`.
 

@@ -103,7 +103,7 @@ rsync:
 #     host: "nas2.tailnet.ts.net"     # a Tailscale name or IP
 #     module: "backup"                # the module name in the daemon's rsyncd.conf
 #     user: "jabs"
-#     password_file: "/home/jim/.config/jabs/nas2.secret"
+#     password_file: "/path/to/.config/jabs/nas2.secret"
 #     port: 873
 
 # --- Email (immediate failure and completion alerts; the dashboard only sends a
