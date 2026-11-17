@@ -116,7 +116,9 @@ class TestJobs:
     def test_every_pair_is_a_target(self):
         pairs = [SimpleNamespace(resolved_name=lambda: "backups", source="/mnt/backups", destination="nas2:jof"),
                  SimpleNamespace(resolved_name=lambda: "kpf", source="nas2:kpf", destination="/mnt/kpf")]
-        assert dashboard.jobs_payload([SimpleNamespace(name="UNAS", pairs=pairs)]) == [{"job_name": "UNAS", "targets": [
+        assert dashboard.jobs_payload([SimpleNamespace(name="UNAS", pairs=pairs, schedules=[
+            SimpleNamespace(cron="0 2 * * *", enabled=False)])]) == [{
+                "job_name": "UNAS", "schedules": [{"cron": "0 2 * * *", "enabled": False}], "targets": [
             {"name": "backups", "source": "/mnt/backups", "destination": "nas2:jof"},
             {"name": "kpf", "source": "nas2:kpf", "destination": "/mnt/kpf"}]}]
 

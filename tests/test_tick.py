@@ -75,6 +75,9 @@ def test_the_heartbeat_reports_each_jobs_pairs(jobs, ran):
     reported = {entry["job_name"]: entry["targets"] for entry in call[1][0]}
     assert sorted(reported) == ["daily", "hourly", "manual"]  # the config, not only the scheduled jobs
     assert reported["daily"] == [{"name": "in", "source": "/data/in", "destination": "/data/out"}]
+    schedules = {entry["job_name"]: entry["schedules"] for entry in call[1][0]}
+    assert schedules == {"daily": [{"cron": "0 3 * * *", "enabled": True}],
+                         "hourly": [{"cron": "0 * * * *", "enabled": True}], "manual": []}
     assert client.names().index("send_jobs") > client.names().index("send_scheduler_check")
 
 

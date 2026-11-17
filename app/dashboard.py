@@ -155,7 +155,7 @@ class Client:
 
 
 def jobs_payload(jobs: list) -> list:
-    """What /api/v2/jobs takes: one target per pair, as written in the job file (a remote is `name:path`, no secrets)."""
-    return [{"job_name": job.name, "targets": [
-        {"name": pair.resolved_name(), "source": pair.source, "destination": pair.destination} for pair in job.pairs]}
-        for job in jobs]
+    """What /api/v2/jobs takes: each job's schedules (disabled ones too) and one target per pair as written in the file."""
+    return [{"job_name": job.name, "schedules": [{"cron": s.cron, "enabled": s.enabled} for s in job.schedules],
+             "targets": [{"name": pair.resolved_name(), "source": pair.source, "destination": pair.destination}
+                         for pair in job.pairs]} for job in jobs]
