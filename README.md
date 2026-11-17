@@ -141,7 +141,6 @@ Run as `.venv/bin/python -m app <command>`.
 | `stop JOB` | Ask a running job to stop gracefully; it resumes on its next run |
 | `verify [JOB] [--deep]` | Compare source and destination without syncing; `--deep` reads file content (slow) |
 | `jobs` | Each job's next scheduled run and last result |
-| `import-local-sync [DIR] [--keep-schedules] [--force] [--dry-run]` | Convert a `local_sync_agent` install's configuration into this one (see [Migrating from local_sync_agent](#migrating-from-local_sync_agent)) |
 | `testmail` | Send a test email with the SMTP settings |
 | `remotes` | Connect to every remote in `config.yaml` and report whether it works |
 | `paths` | Print the directories the agent must be able to write |
@@ -155,7 +154,7 @@ Run as `.venv/bin/python -m app <command>`.
 | --- | --- |
 | 1 Jobs | Each job's pairs, schedule, next run, last result and whether it is running now. **Dry run** (`d`) or **Sync now** (`s`) runs the job in a window that streams rsync's output, with a Stop button. **Stop** (`t`) ends a job running anywhere on this machine, gracefully. Edit a job file (`e`), create one from the template (`n`) or delete one (`x`: you type its name to confirm; synced files stay where they are) |
 | 2 Verify | Every pair with its paths. Quick verify (`v`), deep verify (`d`, asks first) or verify all jobs (`a`) without syncing |
-| 3 Files | Check `config.yaml`, `.env`, `common_exclude.yaml` and every job file, and edit any of them in your system editor (`$VISUAL`, `$EDITOR`, else the system default such as nano). A file is validated when you leave the editor: edit again, revert or keep. The agent reads its files at the start of every run, so a valid edit applies at the next tick; if the service needs a directory it was not given (a new destination or `backup_dir`), it offers to reinstall the units. **Import from local_sync_agent** (`i`) converts an old install's configuration |
+| 3 Files | Check `config.yaml`, `.env`, `common_exclude.yaml` and every job file, and edit any of them in your system editor (`$VISUAL`, `$EDITOR`, else the system default such as nano). A file is validated when you leave the editor: edit again, revert or keep. The agent reads its files at the start of every run, so a valid edit applies at the next tick; if the service needs a directory it was not given (a new destination or `backup_dir`), it offers to reinstall the units. |
 | 4 Diagnostics | Run the tick now, send a test mail, test the dashboard link (sends one heartbeat), test the remotes, show the schedule state, list the writable directories, reset the schedule state (typed confirmation) |
 | 5 Service | State of the service and timer; start (runs a tick now), stop, enable or disable the timer, reinstall the units with the options already in use (all through `sudo`), follow the journal |
 | 6 Docs | Read the install's Markdown files; links between documents work and `b` goes back |
@@ -163,21 +162,6 @@ Run as `.venv/bin/python -m app <command>`.
 A run started from the console is the same `python -m app run JOB` the timer starts, so it takes the same job lock (a job that is already running is refused), reports to the dashboard and emails on failure. A dry run is still reported to the dashboard, marked `[DRY RUN]`. Closing the console stops a run it started.
 
 Run it as the user that owns the install; it refuses to start as root when the install belongs to someone else, because root-owned state files would stop the service from writing its own data. Units are found by their working directory; if that fails, pass `--unit jabs-sync-agent`. Administrative actions are recorded in the journal as `jabs-admin`. It needs the `textual` package, installed by `./setup.sh`.
-
-### Migrating from local_sync_agent
-
-`import-local-sync` reads the old install's `config/global.yaml`, `config/jobs/*.yaml` and `config/common_exclude.yaml` and writes them in this agent's format: the flat rsync settings move under `rsync:`, `paths` become `pairs`, and everything else carries over. The folder defaults to `../local_sync_agent`.
-
-```bash
-.venv/bin/python -m app import-local-sync --dry-run     # preview, nothing is written
-.venv/bin/python -m app import-local-sync               # write the files
-```
-
-- Files that already exist here are kept unless you pass `--force`; a `config.yaml` that is still the starter `setup.sh` copied counts as unused. A converted file that does not validate is reported and not written.
-- Schedules are imported **switched off** so the old and new agents never run the same job. Add `--keep-schedules` to import them as they were.
-- Settings this agent does not use are listed as warnings. The SMTP login is not in the YAML: copy `JABS_SMTP_USERNAME` and `JABS_SMTP_PASSWORD` (and the dashboard URL and key) from the old `.env`.
-
-To cut over: import, run each job with `run JOB --dry-run`, then enable its schedule here, remove the old agent's cron entry and keep the old install until a scheduled run has succeeded.
 
 ### Verifying a mirror
 

@@ -2,7 +2,6 @@
 
 import asyncio
 import datetime
-from pathlib import Path
 from typing import Optional
 
 from textual import on
@@ -12,10 +11,8 @@ from textual.containers import Horizontal
 from textual.widgets import Button, DataTable, Static
 
 from .. import editing
-from ... import settings
 from ..app import Pane
 from ..checks import check_file, managed_files, mode_text
-from ..logs import audit
 
 STATE_TEXT = {"ok": "OK", "warn": "WARNING", "error": "INVALID", "missing": "missing"}
 
@@ -23,9 +20,8 @@ STATE_TEXT = {"ok": "OK", "warn": "WARNING", "error": "INVALID", "missing": "mis
 class FilesPane(Pane):
     TAB_ID = "files"
     TAB_TITLE = "3 Files"
-    ACTIONS = {"files.validate": "do_validate", "files.edit": "do_edit", "files.import": "do_import"}
-    BINDINGS = [Binding("e", "edit", "Edit in editor"), Binding("v", "validate", "Validate all"),
-                Binding("i", "import", "Import from local_sync_agent")]
+    ACTIONS = {"files.validate": "do_validate", "files.edit": "do_edit"}
+    BINDINGS = [Binding("e", "edit", "Edit in editor"), Binding("v", "validate", "Validate all")]
 
     def __init__(self) -> None:
         super().__init__()
@@ -40,7 +36,6 @@ class FilesPane(Pane):
         with Horizontal(classes="buttons"):
             yield Button("Edit", id="edit", variant="primary")
             yield Button("Validate all", id="validate")
-            yield Button("Import from local_sync_agent", id="import")
 
     def on_mount(self) -> None:
         self.query_one(DataTable).add_columns("File", "State", "Mode", "Modified")
@@ -97,45 +92,16 @@ class FilesPane(Pane):
         await editing.edit_entry(self.admin, entry)
         await self.reload()
 
-    async def do_import(self) -> None:
-        fields = [{"key": "dir", "label": "Folder of the local_sync_agent install", "kind": "text",
-                   "value": str(settings.BASE_DIR.parent / "local_sync_agent")}]
-
-        def submit(values: dict) -> dict:
-            if not (Path(values["dir"]).expanduser() / "config").is_dir():
-                raise ValueError(f"{values['dir']}/config was not found")
-            return values
-
-        values = await self.admin.form("Import from local_sync_agent", fields, submit, "Next")
-        if values is None:
-            return
-        choice = await self.admin.choose(
-            "Import from local_sync_agent",
-            "Preview shows what would be written and changes nothing. Files that already exist here are kept. "
-            "Schedules come in switched off so both agents never run the same job.",
-            [("Preview (dry run)", ["--dry-run"]), ("Import", []), ("Import and keep schedules", ["--keep-schedules"]),
-             ("Cancel", None)])
-        if choice is None:
-            return
-        audit("import from local_sync_agent", source=values["dir"], options=" ".join(choice) or "-")
-        await self.admin.run_command("Import from local_sync_agent", ["import-local-sync", values["dir"], *choice])
-        await self.reload()
-
     def action_edit(self) -> None:
         self.admin.spawn(self.do_edit)
 
     def action_validate(self) -> None:
         self.admin.spawn(self.do_validate)
 
-    def action_import(self) -> None:
-        self.admin.spawn(self.do_import)
-
     @on(Button.Pressed)
     def _button(self, event: Button.Pressed) -> None:
         if event.button.id == "edit":
             self.action_edit()
-        elif event.button.id == "import":
-            self.action_import()
         else:
             self.action_validate()
 

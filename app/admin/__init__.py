@@ -20,7 +20,6 @@ COVERAGE = {
     "paths": "diagnostics.paths",
     "remotes": "diagnostics.remotes",
     "reset": "diagnostics.reset",
-    "import-local-sync": "files.import",
 }
 # Subcommands that are not administration tasks.
 NOT_COVERED = {"admin"}
