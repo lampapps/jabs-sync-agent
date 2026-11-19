@@ -192,9 +192,15 @@ class Pair(_Model):
         return self.name.strip() or os.path.basename(source.path.rstrip("/")) or source.remote or "pair"
 
 
+JOB_ID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+# The template ships this placeholder; `job new` and `job adopt` replace it with a real id.
+NIL_JOB_ID = "00000000-0000-4000-8000-000000000000"
+
+
 class JobFile(_Model):
     """One config/jobs/*.yaml; `rsync` holds only the keys this job overrides."""
 
+    job_id: Optional[str] = Field(None, pattern=JOB_ID_PATTERN)
     job_name: Optional[str] = Field(None, min_length=1, max_length=200)
     pairs: list[Pair] = Field(min_length=1)
     schedules: list[Schedule] = Field(default_factory=list)
@@ -203,6 +209,13 @@ class JobFile(_Model):
     exclude: list[str] = Field(default_factory=list)
     use_common_exclude: Optional[bool] = None   # None = the global setting
     stop_at: Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM local time
+
+    @field_validator("job_id")
+    @classmethod
+    def _real_id(cls, value: Optional[str]) -> Optional[str]:
+        if value == NIL_JOB_ID:
+            raise ValueError("is the template's placeholder; run `python -m app job adopt` to give the job an id")
+        return value
 
     @field_validator("rsync")
     @classmethod
@@ -234,8 +247,9 @@ class JobFile(_Model):
 
 
 class Job(_Model):
-    """A job with the global settings merged in."""
+    """A job with the global settings merged in. `job_id` is its identity; `name` is only a label."""
 
+    job_id: str
     name: str
     path: str
     pairs: list[Pair]
@@ -249,7 +263,8 @@ class Job(_Model):
         return [s.cron for s in self.schedules if s.enabled]
 
     def label(self, pair: Pair) -> str:
-        """The dashboard's name for a pair; it stays the same on every run so runs group together."""
+        """The display name of a pair ("job:pair"). A pair's identity on the dashboard is its name within the job
+        (`pair.resolved_name()`), so renaming the job changes only this label."""
         return f"{self.name}:{pair.resolved_name()}"
 
     def pair_excludes(self, pair: Pair) -> list:
@@ -323,6 +338,8 @@ def load_job(path: PathLike, cfg: Config) -> Job:
         raw = JobFile.model_validate(_read_mapping(path))
     except ValidationError as exc:
         raise ConfigError(_format_errors(path, exc)) from exc
+    if not raw.job_id:
+        raise ConfigError(f"{path}: no job_id; run `python -m app job adopt {path.name}` to give the job its id")
     use_common = cfg.use_common_exclude if raw.use_common_exclude is None else raw.use_common_exclude
     exclude = (_common_excludes() if use_common else []) + raw.exclude
     pairs = [pair.model_copy(update={"name": pair.resolved_name()}) for pair in raw.pairs]
@@ -338,14 +355,14 @@ def load_job(path: PathLike, cfg: Config) -> Job:
             raise ConfigError(f"{path}: pair '{pair.name}' writes to a remote, so the job's backup_dir cannot apply to it; "
                               "it is not supported for remote destinations")
     return Job(
-        name=raw.job_name or path.stem, path=str(path), pairs=pairs, schedules=raw.schedules,
+        job_id=raw.job_id, name=raw.job_name or path.stem, path=str(path), pairs=pairs, schedules=raw.schedules,
         verify_after_sync=cfg.verify_after_sync if raw.verify_after_sync is None else raw.verify_after_sync,
         rsync=rsync, exclude=exclude, stop_at=raw.stop_at,
     )
 
 
 def find_job(ref: str, cfg: Config) -> Job:
-    """Resolve a job given as a name (config/jobs/NAME.yaml), a job_name, or a path to a YAML file."""
+    """Resolve a job given as a job id, a file name (config/jobs/NAME.yaml), a job_name, or a path to a YAML file."""
     candidate = Path(ref)
     if ref.endswith((".yaml", ".yml")) and candidate.exists():
         return load_job(candidate, cfg)
@@ -354,7 +371,7 @@ def find_job(ref: str, cfg: Config) -> Job:
         return load_job(by_file, cfg)
     jobs, _ = load_jobs(cfg)
     for job in jobs:
-        if job.name == ref:
+        if ref in (job.job_id, job.name):
             return job
     raise ConfigError(f"job '{ref}' not found (looked for {by_file})")
 
@@ -367,6 +384,11 @@ def load_jobs(cfg: Config) -> tuple:
             jobs.append(load_job(path, cfg))
         except ConfigError as exc:
             errors.append(str(exc))
+    ids = [job.job_id for job in jobs]
+    for job_id in sorted({i for i in ids if ids.count(i) > 1}):
+        files = ", ".join(Path(job.path).name for job in jobs if job.job_id == job_id)
+        errors.append(f"job_id {job_id} is used by more than one file ({files}); a copied job file needs its own id "
+                      "(delete its job_id line and run `python -m app job adopt`)")
     names = [job.name for job in jobs]
     for name in sorted({n for n in names if names.count(n) > 1}):
         errors.append(f"job name '{name}' is used by more than one file in {settings.JOBS_DIR}")

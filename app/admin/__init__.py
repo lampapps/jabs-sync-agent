@@ -16,6 +16,8 @@ COVERAGE = {
     "stop": "jobs.stop",
     "verify": "verify.run",
     "jobs": "jobs.list",
+    "job new": "jobs.new",
+    "job adopt": "jobs.adopt",
     "testmail": "diagnostics.testmail",
     "paths": "diagnostics.paths",
     "remotes": "diagnostics.remotes",

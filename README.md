@@ -13,7 +13,7 @@ A JABS (Just Another Backup Script) agent that mirrors directories with [rsync](
 - Python 3.11 or newer with `python3-venv`
 - [rsync](https://rsync.samba.org/) 3.x
 - systemd, for the timer (without it, run `python -m app tick` from anything that can run a command every few minutes)
-- Optional: a JABS dashboard (`dashboardv2`) to report to; the job list on its Agents page needs dashboard 0.3.0 or newer (0.4.0 also shows whether each schedule is enabled)
+- Optional: a JABS dashboard (`dashboardv2`) to report to; it must be 0.5.0 or newer (the agent talks to its `/api/v2/` endpoints and identifies jobs by id)
 
 ## Install
 
@@ -35,7 +35,7 @@ Do these steps as the user that will own the install, in the install directory.
 
 3. **Configure** (tab `3` Files). Select `.env` and press `e` to edit it in your system editor: set the dashboard URL and key and the SMTP login if you want them (`JABS_DASHBOARD_URL`, `JABS_AGENT_KEY`, `JABS_SMTP_USERNAME`, `JABS_SMTP_PASSWORD`). Do the same for `config.yaml` (rsync defaults, email). The files document themselves, so leave what you do not need. The console checks each file when you close the editor and offers to revert a mistake.
 
-4. **Add your jobs** (tab `1` Jobs). Press `n` to create one from the template and open it in the editor, or `e` to edit the example job. Point each pair at real directories and enable a schedule.
+4. **Add your jobs** (tab `1` Jobs). Press `n` to create one from the template (it gets its own job id) and open it in the editor, or `e` to edit the example job. Point each pair at real directories and enable a schedule. Job files from before 0.10.0 have no id: press `i` (or run `.venv/bin/python -m app job adopt`) once to give them one.
 
 5. **Test email** (tab `4` Diagnostics): press `m` to send a test message. With a dashboard configured, `h` sends one heartbeat to test the link.
 
@@ -75,6 +75,8 @@ sudo systemctl start jabs-sync-agent      # run a tick now
 
 Blank values in YAML (`backup_dir:`) mean "use the default". Check the files with `.venv/bin/python -m app config`.
 
+**Job identity.** Every job file has a `job_id` (a UUID that `job new` and the console's New job write). It identifies the job on the dashboard and in the agent's state and lock file; the file name and `job_name` are only labels, so you can rename both without losing history. Never edit or copy a `job_id`: a copied file needs its own (delete the line and run `job adopt`). The agent refuses a job file without a valid, unique id and says how to fix it. A pair is identified by its `name` within the job (by default the source's last path component), so give each pair an explicit `name` and do not rename it afterwards: a renamed pair starts a new history on the dashboard.
+
 ### Remotes
 
 A pair's `source` or `destination` is an absolute local directory, or `name:path` for a remote declared under `remotes:` in `config.yaml`. A remote is an [rsync daemon](https://rsync.samba.org/ftp/rsync/rsyncd.conf.html) module, such as the one a NAS exposes. One side of a pair must be local, because rsync cannot copy between two remotes.
@@ -96,12 +98,15 @@ With a remote involved, delta transfer is used instead of whole-file copies (`wh
 A job that mirrors in both directions is one job with two ordered pairs; they run in the order listed:
 
 ```yaml
+job_id: "3b1f6c2e-8a54-4d0e-9a41-5f7c2d9b6e10"   # written by `job new`; never edit or copy it
 job_name: "nas-sync"
 stop_at: "07:00"
 pairs:
-  - source: "/mnt/nas1/dirA"
+  - name: "dirA"
+    source: "/mnt/nas1/dirA"
     destination: "nas2:dirA"
-  - source: "nas2:dirB"
+  - name: "dirB"
+    source: "nas2:dirB"
     destination: "/mnt/nas1/dirB"
 schedules:
   - cron: "0 19 * * *"
@@ -137,10 +142,12 @@ Run as `.venv/bin/python -m app <command>`.
 | `config` | Validate `config.yaml` and the job files; shows whether the dashboard is in use |
 | `admin [--unit NAME]` | Open the interactive [admin console](#admin-console) |
 | `tick` | Run what is due and report to the dashboard (the timer does this) |
-| `run JOB [--dry-run]` | Run one job now; `--dry-run` still reports to the dashboard |
+| `run JOB [--dry-run]` | Run one job now (JOB is its id, name, file name or path); `--dry-run` still reports to the dashboard |
 | `stop JOB` | Ask a running job to stop gracefully; it resumes on its next run |
 | `verify [JOB] [--deep]` | Compare source and destination without syncing; `--deep` reads file content (slow) |
 | `jobs` | Each job's next scheduled run and last result |
+| `job new NAME` | Create `config/jobs/NAME.yaml` from the template with a new job id and its schedule disabled |
+| `job adopt [FILE ...]` | Give job files that have no `job_id` one (every file in `config/jobs` by default); needed once after upgrading from 0.9 |
 | `testmail` | Send a test email with the SMTP settings |
 | `remotes` | Connect to every remote in `config.yaml` and report whether it works |
 | `paths` | Print the directories the agent must be able to write |
@@ -152,7 +159,7 @@ Run as `.venv/bin/python -m app <command>`.
 
 | Tab | What you can do |
 | --- | --- |
-| 1 Jobs | Each job's pairs, schedule, next run, last result and whether it is running now. **Dry run** (`d`) or **Sync now** (`s`) runs the job in a window that streams rsync's output, with a Stop button. **Stop** (`t`) ends a job running anywhere on this machine, gracefully. Edit a job file (`e`), create one from the template (`n`) or delete one (`x`: you type its name to confirm; synced files stay where they are) |
+| 1 Jobs | Each job's pairs, schedule, next run, last result and whether it is running now. **Dry run** (`d`) or **Sync now** (`s`) runs the job in a window that streams rsync's output, with a Stop button. **Stop** (`t`) ends a job running anywhere on this machine, gracefully. Edit a job file (`e`), create one from the template (`n`), give old job files an id (`i`) or delete one (`x`: you type its name to confirm; synced files stay where they are) |
 | 2 Verify | Every pair with its paths. Quick verify (`v`), deep verify (`d`, asks first) or verify all jobs (`a`) without syncing |
 | 3 Files | Check `config.yaml`, `.env`, `common_exclude.yaml` and every job file, and edit any of them in your system editor (`$VISUAL`, `$EDITOR`, else the system default such as nano). A file is validated when you leave the editor: edit again, revert or keep. The agent reads its files at the start of every run, so a valid edit applies at the next tick; if the service needs a directory it was not given (a new destination or `backup_dir`), it offers to reinstall the units. |
 | 4 Diagnostics | Run the tick now, send a test mail, test the dashboard link (sends one heartbeat), test the remotes, show the schedule state, list the writable directories, reset the schedule state (typed confirmation) |
@@ -173,18 +180,18 @@ With `backup_dir` set, a file the sync would overwrite or delete on the destinat
 
 ## How it works
 
-- **A job is a list of pairs.** Each pair mirrors one source into one destination with `rsync` and is reported to the dashboard as its own job (`job_name:pair name`). A failing pair never stops the pairs after it.
+- **A job is a list of pairs.** Each pair mirrors one source into one destination with `rsync` and is reported to the dashboard as its own target (shown as `job_name:pair name`, identified by the pair's name within the job). A failing pair never stops the pairs after it.
 - **Defaults suit a LAN or NFS mount:** whole-file copies between local paths, no ownership, a 300 second idle timeout, resumable partial files (`--partial-dir`), and `--delete` so the destination is an exact mirror. Set `delete: false` for an append-only copy.
 - **Safety:** a source and a destination may not contain each other, a missing or unreadable source fails the pair before rsync starts, and `min_free_bytes` refuses to sync into a nearly full destination. With `delete` on, a source with no files at all fails the pair (`refuse_empty_source`), because a dropped NFS mount looks exactly like an empty folder and would wipe the destination; and `max_delete` fails a pair rather than let one run delete more than that many files.
 - **Stopping is not an error.** `stop JOB`, `SIGTERM` and `Ctrl-C` end the running rsync gracefully. rsync keeps its partial file, the dashboard shows the run as `stopped`, no alert is sent, and the next run carries on. Pairs that had not started are finalized as stopped.
-- **No database.** The agent keeps a lock file per job and a small `data/state.json` (which schedule slots were served and each job's last result).
+- **No database.** The agent keeps a lock file per job and a small `data/state.json` (which schedule slots were served and each job's last result), both keyed by job id.
 - Exit codes 23 and 24 from rsync (some files skipped or vanished) are a warning, not a failure.
 
 ## Dashboard integration (optional)
 
 Set `JABS_DASHBOARD_URL` and `JABS_AGENT_KEY` in `.env` (register the agent on the dashboard host with `.venv/bin/python -m app agent add NAME`). Leave them empty, or set `dashboard.enabled: false` in `config.yaml`, to run standalone; `.venv/bin/python -m app config` says which mode is active.
 
-The dashboard receives each run's start, stages, progress about every 5 seconds, completion and verify result, plus a heartbeat with each job's schedule on every tick, and with it each job's schedules (disabled ones too) and pairs (source and destination), which the Agents page lists. Every request carries the machine's **hostname** (`hostname:` in `config.yaml`, else the system name). Dashboard problems are logged and never change a sync's result.
+The dashboard receives each run's start, stages, progress about every 5 seconds, completion and verify result and a heartbeat on every tick, and with each tick each job's schedules (disabled ones too) and pairs (source and destination), which the Agents page lists. Every event carries the job's `job_id` and the pair's name as `target_id`; `job_name` and the `job:pair` label are display text, so renaming a job changes only what is shown. Every request carries the machine's **hostname** (`hostname:` in `config.yaml`, else the system name). Dashboard problems are logged and never change a sync's result.
 
 ## Email alerts
 

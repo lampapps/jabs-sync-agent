@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,7 +9,7 @@ from app import __main__ as cli
 from app import ops, runner, state
 from app.config import ConfigError
 
-from .conftest import requires_rsync, write_config, write_job
+from .conftest import requires_rsync, write_config, write_job, jid
 from .test_runner import put
 
 JOB = ('job_name: "{name}"\npairs:\n  - source: {src}\n    destination: {dst}\n'
@@ -31,8 +32,8 @@ class TestConfigAndJobs:
     def test_config_lists_jobs_pairs_and_schedules(self, media, capsys):
         assert run("config") == 0
         out = capsys.readouterr().out
-        assert "OK" in out and "standalone" in out and "media: 1 pair(s), 0 2 * * *" in out
-        assert "manual: 1 pair(s), no schedule enabled" in out
+        assert "OK" in out and "standalone" in out and f"media ({jid('media')}): 1 pair(s), 0 2 * * *" in out
+        assert f"manual ({jid('manual')}): 1 pair(s), no schedule enabled" in out
 
     def test_config_fails_on_a_broken_job_and_says_which(self, media, home, capsys):
         write_job(home, "bad", "pairs: []\n")
@@ -44,8 +45,8 @@ class TestConfigAndJobs:
         assert "config.example.yaml" in capsys.readouterr().err
 
     def test_jobs_shows_next_and_last_run(self, media, capsys):
-        state.record_run("media", {"success": True, "finished_at": 1_800_000_000})
-        state.record_run("manual", {"success": True, "stopped": True, "finished_at": 1_800_000_000})
+        state.record_run(jid("media"), {"success": True, "finished_at": 1_800_000_000})
+        state.record_run(jid("manual"), {"success": True, "stopped": True, "finished_at": 1_800_000_000})
         assert run("jobs") == 0
         lines = {line.split("\t")[0]: line for line in capsys.readouterr().out.splitlines()}
         assert "next 20" in lines["media"] and "last ok" in lines["media"]
@@ -103,7 +104,7 @@ class TestOtherCommands:
         assert str(home / "data") in listed and str(media / "dst") in listed
 
     def test_reset_needs_confirmation(self, media, capsys):
-        state.record_run("media", {"success": True, "finished_at": 1})
+        state.record_run(jid("media"), {"success": True, "finished_at": 1})
         assert run("reset") == 2
         assert state.read()
         assert run("reset", "--yes") == 0
@@ -120,6 +121,42 @@ class TestOtherCommands:
         assert run("testmail") == 0 and sent == ["JABS sync agent test message"]
 
 
+class TestJobCommands:
+    def test_job_new_creates_a_file_with_its_own_id(self, home, capsys):
+        write_config(home)
+        (home / "config" / "templates").mkdir()
+        (home / "config" / "templates" / "job.yaml").write_text(
+            'job_id: "00000000-0000-4000-8000-000000000000"\njob_name: "example"\n'
+            'pairs:\n  - source: /p\n    destination: /q\n')
+        assert run("job", "new", "photos") == 0
+        assert "photos.yaml" in capsys.readouterr().out
+        assert run("job", "new", "photos") == 1 and "already exists" in capsys.readouterr().err
+        assert run("job", "new", "bad name") == 1
+        assert run("config") == 0
+
+    def test_job_adopt_gives_ids_and_config_then_passes(self, home, capsys):
+        write_config(home)
+        (home / "config" / "jobs" / "old.yaml").write_text("pairs:\n  - source: /p\n    destination: /q\n")
+        assert run("config") == 1 and "job adopt" in capsys.readouterr().err
+        assert run("job", "adopt") == 0
+        assert "old.yaml: job_id" in capsys.readouterr().out
+        assert run("config") == 0
+        assert run("job", "adopt") == 0 and "already has a job_id" in capsys.readouterr().out
+
+    def test_job_adopt_can_name_files(self, home, capsys):
+        write_config(home)
+        one = home / "config" / "jobs" / "one.yaml"
+        two = home / "config" / "jobs" / "two.yaml"
+        for path in (one, two):
+            path.write_text("pairs:\n  - source: /p\n    destination: /q\n")
+        assert run("job", "adopt", str(one)) == 0
+        assert "job_id" in one.read_text() and "job_id" not in two.read_text()
+
+    def test_job_without_a_subcommand_prints_usage(self, home, capsys):
+        write_config(home)
+        assert run("job") == 2 and "usage" in capsys.readouterr().err
+
+
 class TestOps:
     def test_format_last(self):
         assert ops.format_last(None) == "-"
@@ -134,22 +171,23 @@ class TestOps:
                                                             str(tmp_path / "kept")])
 
     def test_stop_job_signals_the_process_holding_the_lock(self, home):
-        lock = runner.lock_path("held")
+        lock = runner.lock_path(jid("held"))
         code = ("import sys, time; sys.path.insert(0, %r); from app import locking; "
                 "held = locking.acquire_lock(%r); print('locked', flush=True); time.sleep(60)") % (
                     str(Path(runner.__file__).parent.parent), lock)
+        job = SimpleNamespace(job_id=jid("held"), name="held")
         child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
         try:
             assert child.stdout.readline().strip() == "locked"
-            assert ops.job_lock_info("held")["pid"] == child.pid
-            assert ops.stop_job("held") is True
+            assert ops.job_lock_info(jid("held"))["pid"] == child.pid
+            assert ops.stop_job(job) is True
             assert child.wait(timeout=10) != 0
         finally:
             child.kill()
             child.wait()
-        assert ops.stop_job("held") is False
+        assert ops.stop_job(job) is False
 
     def test_stop_job_refuses_when_the_holder_is_unknown(self, home, monkeypatch):
         monkeypatch.setattr(ops, "job_lock_info", lambda name: {})
         with pytest.raises(ConfigError, match="process id"):
-            ops.stop_job("x")
+            ops.stop_job(SimpleNamespace(job_id="x", name="x"))

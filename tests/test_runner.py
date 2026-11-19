@@ -4,7 +4,7 @@ from app import locking, runner, state
 from app.config import Config, load_config, load_job
 from app.rsync import StopRequest
 
-from .conftest import requires_rsync, write_config, write_job
+from .conftest import requires_rsync, write_config, write_job, jid
 
 
 class Recorder:
@@ -69,10 +69,10 @@ class TestRunJob:
         assert files(tmp_path / "media" / "dst") == {"a.txt": "a", "sub/b.txt": "b"}
         assert client.names()[0] == "send_sync_start" and client.names()[-1] == "send_check_result"
         done = client.first("send_sync_complete")
-        assert done[1][0] == "j" and done[1][1] == "j:media" and done[2]["files_backed_up"] == 2
+        assert done[1][:4] == (jid("j"), "j", "media", "j:media") and done[2]["files_backed_up"] == 2
         assert done[2].get("success", True) is True and done[2].get("stopped") is not True
         assert client.first("send_check_result")[2]["success"] is True
-        last = state.read()["jobs"]["j"]["last_run"]
+        last = state.read()["jobs"][jid("j")]["last_run"]
         assert last["success"] is True and last["stopped"] is False and last["pairs"][0]["files"] == 2
         assert env["pings"] == [("up", "j: OK")] and [n[0] for n in env["notices"]] == ["backup_complete"]
 
@@ -83,7 +83,7 @@ class TestRunJob:
         client = Recorder()
         assert runner.run_job(job, Config(), client)
         starts = client.all("send_sync_start")
-        assert [c[1][1] for c in starts] == ["j:one", "j:two"]
+        assert [c[1][3] for c in starts] == ["j:one", "j:two"]
         assert len({c[2]["job_run_id"] for c in starts}) == 1 and len({c[2]["run_id"] for c in starts}) == 2
 
     def test_a_failing_pair_does_not_stop_the_next_one(self, home, tmp_path, env):
@@ -96,7 +96,7 @@ class TestRunJob:
         assert len(errors) == 1 and "not accessible" in errors[0][2]["error_message"]
         assert [n[0] for n in env["notices"]] == ["error", "backup_complete"]
         assert env["pings"][0][0] == "down"
-        last = state.read()["jobs"]["j"]["last_run"]
+        last = state.read()["jobs"][jid("j")]["last_run"]
         assert last["success"] is False and "not accessible" in last["error"]
         assert [p["success"] for p in last["pairs"]] == [False, True]
 
@@ -132,7 +132,7 @@ class TestRunJob:
         put(tmp_path / "media" / "src", {"a.txt": "a"})
         assert runner.run_job(job, Config(), Recorder()) is False
         assert files(tmp_path / "media" / "dst") == {}
-        assert "free" in state.read()["jobs"]["j"]["last_run"]["error"]
+        assert "free" in state.read()["jobs"][jid("j")]["last_run"]["error"]
 
     def test_the_backup_dir_keeps_what_a_run_overwrites_and_old_runs_are_pruned(self, home, tmp_path, env):
         kept = tmp_path / "kept"
@@ -148,7 +148,7 @@ class TestRunJob:
     def test_a_job_that_is_already_running_is_skipped(self, home, tmp_path, env):
         job = make_job(home, tmp_path)
         put(tmp_path / "media" / "src", {"a.txt": "a"})
-        held = locking.acquire_lock(runner.lock_path("j"))
+        held = locking.acquire_lock(runner.lock_path(jid("j")))
         try:
             client = Recorder()
             assert runner.run_job(job, Config(), client) is False
@@ -172,7 +172,7 @@ class TestRunJob:
         done = client.all("send_sync_complete")
         assert len(done) == 2 and all(c[2]["stopped"] is True for c in done)
         assert not (tmp_path / "one" / "dst").exists()
-        last = state.read()["jobs"]["j"]["last_run"]
+        last = state.read()["jobs"][jid("j")]["last_run"]
         assert last["success"] is True and last["stopped"] is True
         assert env["notices"] == [] and env["pings"][0][0] == "up"
 

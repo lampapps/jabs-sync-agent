@@ -20,7 +20,7 @@ def _cmd_config(_args: argparse.Namespace, cfg: Config, client: Client) -> int:
     print(f"{settings.JOBS_DIR}: {len(jobs)} job(s)")
     for job in jobs:
         crons = ", ".join(job.enabled_crons()) or "no schedule enabled"
-        print(f"  {job.name}: {len(job.pairs)} pair(s), {crons}")
+        print(f"  {job.name} ({job.job_id}): {len(job.pairs)} pair(s), {crons}")
     for message in errors:
         print(message, file=sys.stderr)
     return 1 if errors else 0
@@ -39,8 +39,8 @@ def _cmd_run(args: argparse.Namespace, cfg: Config, client: Client) -> int:
     return 0 if ok else 1
 
 
-def _cmd_stop(args: argparse.Namespace, _cfg: Config, _client: Client) -> int:
-    if not ops.stop_job(args.job):
+def _cmd_stop(args: argparse.Namespace, cfg: Config, _client: Client) -> int:
+    if not ops.stop_job(config.find_job(args.job, cfg)):
         print(f"'{args.job}' is not running", file=sys.stderr)
         return 1
     print(f"asked '{args.job}' to stop; rsync keeps its partial file and the job resumes on its next run")
@@ -76,6 +76,30 @@ def _cmd_jobs(_args: argparse.Namespace, cfg: Config, _client: Client) -> int:
     for message in errors:
         print(message, file=sys.stderr)
     return 1 if errors else 0
+
+
+def _cmd_job_new(args: argparse.Namespace, _cfg: Config, _client: Client) -> int:
+    try:
+        path = ops.new_job(args.name)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"created {path} with a new job id; edit its pairs and schedule, then run `python -m app config`")
+    return 0
+
+
+def _cmd_job_adopt(args: argparse.Namespace, _cfg: Config, _client: Client) -> int:
+    changed = ops.adopt_jobs(args.files or None)
+    for path, job_id in changed:
+        print(f"{path.name}: job_id {job_id}")
+    if not changed:
+        print("every job file already has a job_id")
+    return 0
+
+
+def _cmd_job_usage(_args: argparse.Namespace, _cfg: Config, _client: Client) -> int:
+    print("usage: python -m app job {new,adopt} ...", file=sys.stderr)
+    return 2
 
 
 def _cmd_testmail(_args: argparse.Namespace, cfg: Config, _client: Client) -> int:
@@ -130,14 +154,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--unit", help="systemd unit name of this install, if it cannot be detected (e.g. jabs-sync-agent)")
     add("tick", _cmd_tick, "run the periodic work once (driven by the systemd timer)")
     run = add("run", _cmd_run, "run one sync job now")
-    run.add_argument("job", help="job name (config/jobs/NAME.yaml) or a path to a job file")
+    run.add_argument("job", help="job id, job name, file name (config/jobs/NAME.yaml) or a path to a job file")
     run.add_argument("--dry-run", action="store_true", help="pass --dry-run to rsync (still reported to the dashboard)")
     stop = add("stop", _cmd_stop, "stop a running job gracefully; it resumes on its next run")
-    stop.add_argument("job", help="job name")
+    stop.add_argument("job", help="job id or name")
     verify = add("verify", _cmd_verify, "compare source and destination without syncing (all jobs unless one is named)")
-    verify.add_argument("job", nargs="?", help="job name or path to a job file")
+    verify.add_argument("job", nargs="?", help="job id, name or path to a job file")
     verify.add_argument("--deep", action="store_true", help="read and compare file content (slow)")
     add("jobs", _cmd_jobs, "list jobs with their next and last run")
+    job = add("job", _cmd_job_usage, "create a job file, or give existing ones a job id")
+    job_sub = job.add_subparsers(dest="job_command", metavar="command")
+    job_new = job_sub.add_parser("new", help="create config/jobs/NAME.yaml from the template with a new job id")
+    job_new.set_defaults(func=_cmd_job_new)
+    job_new.add_argument("name", help="letters, digits, . _ and -")
+    job_adopt = job_sub.add_parser(
+        "adopt", help="give job files that have no job_id one (needed once after upgrading from 0.9)")
+    job_adopt.set_defaults(func=_cmd_job_adopt)
+    job_adopt.add_argument("files", nargs="*", help="job files to adopt (default: every file in config/jobs)")
     add("testmail", _cmd_testmail, "send a test message with the email settings")
     add("remotes", _cmd_remotes, "connect to every remote in config.yaml and report whether it works")
     add("paths", _cmd_paths, "print the directories the agent must be able to write")

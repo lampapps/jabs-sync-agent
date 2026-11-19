@@ -41,13 +41,16 @@ if [[ -z $(ls -A config/jobs 2>/dev/null) ]]; then
     copy_if_missing config/templates/job.yaml config/jobs/example.yaml
 fi
 
+# Job files from before job ids (0.10.0), and the example copied above, get their id here.
+.venv/bin/python -m app job adopt || true
+
 .venv/bin/python -m app config
 
 cat <<EOT
 
 Next steps:
   1. Edit config/config.yaml (email, rsync defaults) and .env (optional dashboard URL and key, SMTP login).
-  2. Add jobs in config/jobs/*.yaml (copy config/templates/job.yaml), point each pair at real paths and enable a schedule.
+  2. Add jobs:               .venv/bin/python -m app job new NAME   (then edit config/jobs/NAME.yaml, point each pair at real paths and enable a schedule)
   3. Try a job:              .venv/bin/python -m app run JOB --dry-run
   4. Install the timer:      sudo deploy/install.sh        (add --read-all to sync files you do not own)
 EOT

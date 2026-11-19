@@ -18,7 +18,7 @@ from app.__main__ import main
 from app.config import Config, ConfigError, Remote, RsyncOptions, find_job, load_config, load_job
 from app.rsync import RsyncError, StopRequest
 
-from .conftest import requires_rsync, write_config, write_job
+from .conftest import requires_rsync, write_config, write_job, jid
 from .test_runner import Recorder, env, files, put  # noqa: F401  (env is a fixture)
 
 UTC = timezone.utc
@@ -160,7 +160,7 @@ class TestDeadline:
         assert schedule.stop_deadline("02:59", now) == datetime(2027, 1, 16, 2, 59).astimezone()
 
     def job(self, stop_at):
-        return SimpleNamespace(name="j", enabled_crons=lambda: ["0 2 * * *"], stop_at=stop_at)
+        return SimpleNamespace(job_id="j", name="j", enabled_crons=lambda: ["0 2 * * *"], stop_at=stop_at)
 
     def test_a_slot_whose_window_has_closed_is_skipped(self):
         local = lambda *a: datetime(*a).astimezone()  # noqa: E731
@@ -274,7 +274,7 @@ class TestAgainstADaemon:
         assert runner.run_job(job, load_config(), client) is True
         assert files(daemon.root / "dirA") == {"a": "A"}
         assert files(tmp_path / "nas1" / "dirB") == {"b": "B"}
-        assert [c[1][1] for c in client.all("send_sync_start")] == ["j:dirA", "j:dirB"]
+        assert [c[1][3] for c in client.all("send_sync_start")] == ["j:dirA", "j:dirB"]
         assert [c[2]["success"] for c in client.all("send_check_result")] == [True, True]
 
     def test_a_missing_password_file_fails_the_pair_before_rsync_runs(self, home, daemon, tmp_path, env):  # noqa: F811
@@ -283,7 +283,7 @@ class TestAgainstADaemon:
         job = load_job(write_job(home, "j", job_body((str(tmp_path / "src"), "nas2:x"))), load_config())
         client = Recorder()
         assert runner.run_job(job, load_config(), client) is False
-        assert "Password file for remote 'nas2' not found" in state.read()["jobs"]["j"]["last_run"]["error"]
+        assert "Password file for remote 'nas2' not found" in state.read()["jobs"][jid("j")]["last_run"]["error"]
 
     def test_an_empty_remote_source_is_refused(self, home, daemon, tmp_path, env):  # noqa: F811
         write_config(home, f"use_common_exclude: false\nremotes:\n  nas2:\n    host: 127.0.0.1\n    module: backup\n"
@@ -313,7 +313,7 @@ class TestGuards:
         client = Recorder()
         assert runner.run_job(job, Config(), client) is False
         assert files(tmp_path / "dst") == {"precious": "data"}
-        assert "Source is empty" in state.read()["jobs"]["j"]["last_run"]["error"]
+        assert "Source is empty" in state.read()["jobs"][jid("j")]["last_run"]["error"]
         assert [n[0] for n in env["notices"]] == ["error"]
 
     def test_an_empty_source_is_allowed_when_asked_for(self, home, tmp_path, env):  # noqa: F811
@@ -334,7 +334,7 @@ class TestGuards:
         job = make_pair_job(home, tmp_path, "  max_delete: 2\n")
         client = Recorder()
         assert runner.run_job(job, Config(), client) is False
-        assert "max_delete" in state.read()["jobs"]["j"]["last_run"]["error"]
+        assert "max_delete" in state.read()["jobs"][jid("j")]["last_run"]["error"]
         assert len([p for p in files(tmp_path / "dst") if p.startswith("old")]) >= 3
 
     def test_max_delete_allows_a_small_deletion(self, home, tmp_path, env):  # noqa: F811
@@ -359,7 +359,7 @@ class TestStopAt:
         assert runner.run_job(job, Config(), client) is True
         assert time.time() - started < 15
         assert client.first("send_sync_complete")[2]["stopped"] is True
-        assert state.read()["jobs"]["j"]["last_run"]["stopped"] is True
+        assert state.read()["jobs"][jid("j")]["last_run"]["stopped"] is True
         assert env["notices"] == []
 
         monkeypatch.undo()

@@ -22,11 +22,11 @@ from app.admin.panes.jobs import JobsPane
 from app.admin.panes.service import ServicePane
 from app.admin.panes.verify import VerifyPane
 
-from .conftest import write_config, write_job
+from .conftest import write_config, write_job, jid
 
 JOB = ('job_name: "{name}"\npairs:\n  - source: /data/{name}/in\n    destination: /data/{name}/out\n'
        'schedules:\n  - cron: "0 3 * * *"\n    enabled: true\n')
-TEMPLATE = 'job_name: "example"\npairs:\n  - source: /p\n    destination: /q\n'
+TEMPLATE = 'job_id: "00000000-0000-4000-8000-000000000000"\njob_name: "example"\npairs:\n  - source: /p\n    destination: /q\n'
 
 
 def drive(scenario, size=(130, 45)):
@@ -153,8 +153,8 @@ class TestStartup:
 
 class TestJobs:
     def test_lists_jobs_with_pairs_schedule_next_run_and_last_result(self, two_jobs):
-        state.record_run("alpha", {"success": True, "finished_at": 1_800_000_000})
-        state.record_run("beta", {"success": True, "stopped": True, "finished_at": 1_800_000_000})
+        state.record_run(jid("alpha"), {"success": True, "finished_at": 1_800_000_000})
+        state.record_run(jid("beta"), {"success": True, "stopped": True, "finished_at": 1_800_000_000})
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: len(table_rows(app, "jobs-table")) == 2)
@@ -165,7 +165,7 @@ class TestJobs:
         drive(scenario)
 
     def test_a_running_job_is_marked(self, two_jobs):
-        lock = locking.acquire_lock(runner.lock_path("beta"))
+        lock = locking.acquire_lock(runner.lock_path(jid("beta")))
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: len(table_rows(app, "jobs-table")) == 2)
@@ -236,7 +236,7 @@ class TestJobs:
         drive(scenario)
 
     def test_a_job_that_is_already_running_is_refused(self, two_jobs, child):
-        lock = locking.acquire_lock(runner.lock_path("alpha"))
+        lock = locking.acquire_lock(runner.lock_path(jid("alpha")))
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: table_rows(app, "jobs-table"))
@@ -314,7 +314,7 @@ class TestJobs:
         pytest.fail("the child process was left running")
 
     def test_the_stop_button_ends_a_job_running_elsewhere(self, two_jobs):
-        holder = hold_lock("alpha")
+        holder = hold_lock(jid("alpha"))
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: table_rows(app, "jobs-table"))
@@ -339,7 +339,7 @@ class TestJobs:
         drive(scenario)
 
     def test_cancelling_the_stop_leaves_the_job_alone(self, two_jobs):
-        holder = hold_lock("alpha")
+        holder = hold_lock(jid("alpha"))
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: table_rows(app, "jobs-table"))
@@ -377,8 +377,24 @@ class TestJobs:
             await wait_for(pilot, lambda: len(table_rows(app, "jobs-table")) == 3)
 
         drive(scenario)
-        assert 'job_name: "gamma"' in (settings.JOBS_DIR / "gamma.yaml").read_text()
+        text = (settings.JOBS_DIR / "gamma.yaml").read_text()
+        assert 'job_name: "gamma"' in text and "00000000-0000" not in text and "job_id:" in text
         assert opened == [settings.JOBS_DIR / "gamma.yaml"]
+
+    def test_add_missing_ids_gives_old_job_files_an_id(self, home):
+        write_config(home, "")
+        (settings.JOBS_DIR / "old.yaml").write_text("pairs:\n  - source: /p\n    destination: /q\n")
+
+        async def scenario(app, pilot):
+            await wait_for(pilot, lambda: "have problems" in str(app.query_one("#jobs-note", Static).render()))
+            pane_button(app, JobsPane, "adopt").press()
+            await wait_dialog(pilot, app, "Add missing ids")
+            assert "old.yaml" in dialog_text(app)
+            await press(pilot, app, "close")
+            await wait_for(pilot, lambda: table_rows(app, "jobs-table"))
+
+        drive(scenario)
+        assert "job_id:" in (settings.JOBS_DIR / "old.yaml").read_text()
 
     @pytest.mark.parametrize("name,message", [("bad name", "letters"), ("alpha", "already exists")])
     def test_new_job_rejects_bad_or_duplicate_names(self, two_jobs, name, message):
@@ -466,7 +482,7 @@ class TestVerify:
         assert child == [["verify"]]
 
     def test_a_running_job_is_not_verified(self, two_jobs, child):
-        lock = locking.acquire_lock(runner.lock_path("alpha"))
+        lock = locking.acquire_lock(runner.lock_path(jid("alpha")))
 
         async def scenario(app, pilot):
             await open_tab(pilot, "2")
@@ -690,7 +706,7 @@ class TestDiagnostics:
         monkeypatch.setenv("JABS_DASHBOARD_URL", "http://dash:5002")
         monkeypatch.setenv("JABS_AGENT_KEY", "k")
         calls = []
-        monkeypatch.setattr(dashboard.Client, "send_scheduler_check", lambda self, n=0: calls.append(n) or accepted)
+        monkeypatch.setattr(dashboard.Client, "send_heartbeat", lambda self: calls.append(1) or accepted)
 
         async def scenario(app, pilot):
             await open_tab(pilot, "4")
@@ -699,11 +715,11 @@ class TestDiagnostics:
             assert expect in dialog_text(app) and "http://dash:5002" in dialog_text(app)
 
         drive(scenario)
-        assert calls == [0]
+        assert calls == [1]
 
     def test_state_view_shows_results_and_running_jobs(self, two_jobs):
-        state.record_run("alpha", {"success": True, "finished_at": 1_800_000_000})
-        lock = locking.acquire_lock(runner.lock_path("beta"))
+        state.record_run(jid("alpha"), {"success": True, "finished_at": 1_800_000_000})
+        lock = locking.acquire_lock(runner.lock_path(jid("beta")))
 
         async def scenario(app, pilot):
             await open_tab(pilot, "4")
@@ -727,7 +743,7 @@ class TestDiagnostics:
         drive(scenario)
 
     def test_reset_needs_the_word_and_removes_state_and_locks(self, two_jobs):
-        state.record_run("alpha", {"success": True, "finished_at": 1})
+        state.record_run(jid("alpha"), {"success": True, "finished_at": 1})
         assert settings.STATE_PATH.exists()
 
         async def scenario(app, pilot):
@@ -744,7 +760,7 @@ class TestDiagnostics:
         assert not settings.STATE_PATH.exists()
 
     def test_cancelling_the_reset_changes_nothing(self, two_jobs):
-        state.record_run("alpha", {"success": True, "finished_at": 1})
+        state.record_run(jid("alpha"), {"success": True, "finished_at": 1})
 
         async def scenario(app, pilot):
             await open_tab(pilot, "4")
@@ -939,8 +955,8 @@ class TestRealSync:
 
 class TestDeleteJob:
     def test_needs_the_job_name_typed_then_removes_the_file_and_its_state(self, two_jobs):
-        state.record_run("alpha", {"success": True, "finished_at": 1})
-        state.record_run("beta", {"success": True, "finished_at": 1})
+        state.record_run(jid("alpha"), {"success": True, "finished_at": 1})
+        state.record_run(jid("beta"), {"success": True, "finished_at": 1})
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: len(table_rows(app, "jobs-table")) == 2)
@@ -957,7 +973,7 @@ class TestDeleteJob:
 
         drive(scenario)
         assert not (settings.JOBS_DIR / "alpha.yaml").exists() and (settings.JOBS_DIR / "beta.yaml").exists()
-        assert list(state.read()["jobs"]) == ["beta"]
+        assert list(state.read()["jobs"]) == [jid("beta")]
 
     def test_the_selected_job_is_the_one_deleted(self, two_jobs):
         async def scenario(app, pilot):
@@ -983,7 +999,7 @@ class TestDeleteJob:
         assert (settings.JOBS_DIR / "alpha.yaml").exists()
 
     def test_a_running_job_cannot_be_deleted(self, two_jobs):
-        lock = locking.acquire_lock(runner.lock_path("alpha"))
+        lock = locking.acquire_lock(runner.lock_path(jid("alpha")))
 
         async def scenario(app, pilot):
             await wait_for(pilot, lambda: table_rows(app, "jobs-table"))

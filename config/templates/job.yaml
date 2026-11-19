@@ -1,18 +1,26 @@
 # =============================================================================
 # JABS Sync Agent job
 # =============================================================================
-# Copy this file to config/jobs/<name>.yaml (the admin console's New job does it
-# and fills in the name). Every setting a job can have is listed here; the
-# uncommented ones are the minimum. Settings that also exist in config.yaml are
-# overrides: leave them commented out to use the global value, and see
-# config.example.yaml for what each one means.
+# Use `python -m app job new NAME` (or the admin console's New job): it copies
+# this file to config/jobs/NAME.yaml, fills in the name and gives the job its
+# id. Every setting a job can have is listed here; the uncommented ones are the
+# minimum. Settings that also exist in config.yaml are overrides: leave them
+# commented out to use the global value, and see config.example.yaml for what
+# each one means.
 
-# Name shown on the dashboard. Defaults to the file name.
+# Identifies this job on the dashboard and in the agent's state, so the job can
+# be renamed without losing its history. Never edit or copy it: a copied job
+# file needs its own id (delete the line and run `python -m app job adopt`).
+job_id: "00000000-0000-4000-8000-000000000000"
+
+# Name shown on the dashboard. May be changed at any time. Defaults to the file
+# name.
 job_name: "example"
 
 # One or more source/destination pairs, synced in order. Each pair is reported
-# to the dashboard as its own job (job_name:pair name), and a failing pair never
-# stops the next pair.
+# to the dashboard as its own target (shown as job_name:pair name) and a failing
+# pair never stops the next pair. A pair is identified by its `name`, so set it
+# explicitly and do not rename it: a renamed pair starts a new history.
 # A source or destination is an absolute local directory or `remote:path` for
 # a remote defined under `remotes:` in config.yaml; one side must be local.
 # Both sides of a pair may not contain each other, and one pair may not write

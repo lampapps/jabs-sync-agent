@@ -91,7 +91,7 @@ class VerifyPane(Pane):
             if job is None:
                 await self.admin.show("No pair selected", "Select a pair in the table first.")
                 return
-            if await asyncio.to_thread(ops.job_lock_info, job.name) is not None:
+            if await asyncio.to_thread(ops.job_lock_info, job.job_id) is not None:
                 await self.admin.error(f"'{job.name}' is running; verify after it finishes.")
                 return
             args.append(job.path)
